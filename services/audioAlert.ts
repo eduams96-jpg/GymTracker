@@ -1,4 +1,5 @@
-import { Audio } from 'expo-av';
+import { createAudioPlayer, setAudioModeAsync, AudioPlayer } from 'expo-audio';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as Haptics from 'expo-haptics';
 import { Platform } from 'react-native';
 
@@ -27,13 +28,13 @@ function generateWavBase64(frequency: number, durationMs: number, sampleRate = 2
   buffer[13] = 0x6d; // 'm'
   buffer[14] = 0x74; // 't'
   buffer[15] = 0x20; // ' '
-  view.setUint32(16, 16, true); // Subchunk1Size (16 for PCM)
-  view.setUint16(20, 1, true); // AudioFormat (1 = PCM)
-  view.setUint16(22, 1, true); // NumChannels (1 = Mono)
-  view.setUint32(24, sampleRate, true); // SampleRate
-  view.setUint32(28, sampleRate * 2, true); // ByteRate (SampleRate * NumChannels * BitsPerSample/8)
-  view.setUint16(32, 2, true); // BlockAlign (NumChannels * BitsPerSample/8)
-  view.setUint16(34, 16, true); // BitsPerSample (16 bits)
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); // PCM
+  view.setUint16(22, 1, true); // Mono
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
 
   // "data" sub-chunk
   buffer[36] = 0x64; // 'd'
@@ -42,16 +43,15 @@ function generateWavBase64(frequency: number, durationMs: number, sampleRate = 2
   buffer[39] = 0x61; // 'a'
   view.setUint32(40, dataByteLength, true);
 
-  // Generate sine wave samples with gentle attack and decay envelope
+  // Generate sine wave samples with gentle attack and decay
   const volume = 0.7;
-  const attackSamples = Math.floor(sampleRate * 0.01); // 10ms attack
-  const decaySamples = Math.floor(sampleRate * 0.02); // 20ms decay
+  const attackSamples = Math.floor(sampleRate * 0.01);
+  const decaySamples = Math.floor(sampleRate * 0.02);
 
   for (let i = 0; i < numSamples; i++) {
     const t = i / sampleRate;
     let amp = volume;
 
-    // Envelope
     if (i < attackSamples) {
       amp = volume * (i / attackSamples);
     } else if (i > numSamples - decaySamples) {
@@ -73,33 +73,43 @@ function generateWavBase64(frequency: number, durationMs: number, sampleRate = 2
 
 class AudioAlertService {
   private isAudioConfigured = false;
-  private tickSoundUri: string | null = null;
-  private chimeSoundUri: string | null = null;
+  private tickFilePath: string | null = null;
+  private chimeFilePath: string | null = null;
+  private tickPlayer: AudioPlayer | null = null;
+  private chimePlayer: AudioPlayer | null = null;
   private isMuted = false;
 
-  constructor() {
+  private async initFiles() {
+    if (this.tickFilePath && this.chimeFilePath) return;
     try {
-      // Pre-generate short countdown beep (650Hz, 80ms)
-      this.tickSoundUri = `data:audio/wav;base64,${generateWavBase64(660, 90)}`;
-      // Pre-generate completion chime (880Hz, 350ms)
-      this.chimeSoundUri = `data:audio/wav;base64,${generateWavBase64(988, 320)}`;
+      const tickBase64 = generateWavBase64(660, 90);
+      const chimeBase64 = generateWavBase64(988, 320);
+
+      this.tickFilePath = `${FileSystem.cacheDirectory}gym_rest_tick.wav`;
+      this.chimeFilePath = `${FileSystem.cacheDirectory}gym_rest_chime.wav`;
+
+      await FileSystem.writeAsStringAsync(this.tickFilePath, tickBase64, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+
+      await FileSystem.writeAsStringAsync(this.chimeFilePath, chimeBase64, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
     } catch (e) {
-      console.warn('Could not pre-generate audio tones:', e);
+      console.warn('Could not write audio WAV files to cache:', e);
     }
   }
 
   private async setupAudioMode() {
     if (this.isAudioConfigured || Platform.OS === 'web') return;
     try {
-      await Audio.setAudioModeAsync({
-        playsInSilentModeIOS: true,
-        staysActiveInBackground: false,
-        shouldDuckAndroid: true, // Lowers background Spotify/music volume instead of stopping it!
-        playThroughEarpieceAndroid: false,
+      await setAudioModeAsync({
+        playsInSilentMode: true,
+        interruptionMode: 'duckOthers', // Lowers background Spotify/music volume instead of stopping it!
       });
       this.isAudioConfigured = true;
     } catch (err) {
-      console.warn('Audio.setAudioModeAsync warning:', err);
+      console.warn('setAudioModeAsync warning:', err);
     }
   }
 
@@ -118,19 +128,18 @@ class AudioAlertService {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
     }
 
-    if (this.isMuted || !this.tickSoundUri) return;
+    if (this.isMuted) return;
 
     try {
       await this.setupAudioMode();
-      const { sound } = await Audio.Sound.createAsync(
-        { uri: this.tickSoundUri },
-        { shouldPlay: true, volume: 0.85 }
-      );
-      sound.setOnPlaybackStatusUpdate((status) => {
-        if (status.isLoaded && status.didJustFinish) {
-          sound.unloadAsync().catch(() => {});
-        }
-      });
+      await this.initFiles();
+      if (!this.tickFilePath) return;
+
+      if (!this.tickPlayer) {
+        this.tickPlayer = createAudioPlayer(this.tickFilePath);
+      }
+      this.tickPlayer.seekTo(0);
+      this.tickPlayer.play();
     } catch (e) {
       console.warn('Could not play countdown tick:', e);
     }
@@ -146,19 +155,18 @@ class AudioAlertService {
       }, 150);
     }
 
-    if (this.isMuted || !this.chimeSoundUri) return;
+    if (this.isMuted) return;
 
     try {
       await this.setupAudioMode();
-      const { sound } = await Audio.Sound.createAsync(
-        { uri: this.chimeSoundUri },
-        { shouldPlay: true, volume: 1.0 }
-      );
-      sound.setOnPlaybackStatusUpdate((status) => {
-        if (status.isLoaded && status.didJustFinish) {
-          sound.unloadAsync().catch(() => {});
-        }
-      });
+      await this.initFiles();
+      if (!this.chimeFilePath) return;
+
+      if (!this.chimePlayer) {
+        this.chimePlayer = createAudioPlayer(this.chimeFilePath);
+      }
+      this.chimePlayer.seekTo(0);
+      this.chimePlayer.play();
     } catch (e) {
       console.warn('Could not play completion chime:', e);
     }
