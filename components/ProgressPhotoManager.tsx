@@ -250,7 +250,11 @@ export const ProgressPhotoManager: React.FC = () => {
       )}
 
       {/* Save New Photo Modal */}
-      <Modal visible={isSaveModalOpen} transparent animationType="slide">
+      <Modal
+        visible={isSaveModalOpen}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setIsSaveModalOpen(false)}>
         <View style={styles.saveModalOverlay}>
           <View style={styles.saveModalCard}>
             <View style={styles.saveModalHeader}>
@@ -326,7 +330,11 @@ export const ProgressPhotoManager: React.FC = () => {
       </Modal>
 
       {/* Full-Screen Photo Detail Modal */}
-      <Modal visible={!!selectedPhotoForDetail} transparent animationType="fade">
+      <Modal
+        visible={!!selectedPhotoForDetail}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setSelectedPhotoForDetail(null)}>
         <View style={styles.detailOverlay}>
           {selectedPhotoForDetail && (
             <View style={styles.detailContainer}>

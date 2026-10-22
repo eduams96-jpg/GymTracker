@@ -149,6 +149,18 @@ export const StorageService = {
     }
   },
 
+  async updateBodyMetric(id: string, updates: Partial<BodyMetricLog>): Promise<BodyMetricLog[]> {
+    try {
+      const current = await this.getBodyMetrics();
+      const updated = current.map((m) => (m.id === id ? { ...m, ...updates } : m));
+      await this.saveBodyMetrics(updated);
+      return updated;
+    } catch (e) {
+      console.error('Error updating body metric:', e);
+      return [];
+    }
+  },
+
   async getProgressPhotos(): Promise<ProgressPhoto[]> {
     try {
       const data = await AsyncStorage.getItem(KEYS.PROGRESS_PHOTOS);

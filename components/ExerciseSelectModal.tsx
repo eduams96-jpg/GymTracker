@@ -43,9 +43,18 @@ export const ExerciseSelectModal: React.FC<ExerciseSelectModalProps> = ({
   const [newExerciseName, setNewExerciseName] = useState('');
   const [newExerciseMuscle, setNewExerciseMuscle] = useState<MuscleGroup>('peito');
 
+  const normalizeText = (text: string) =>
+    text
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .trim();
+
   const filteredExercises = useMemo(() => {
+    const query = normalizeText(search);
     return exercises.filter((ex) => {
-      const matchesSearch = ex.name.toLowerCase().includes(search.toLowerCase());
+      const matchesSearch =
+        query === '' || normalizeText(ex.name).includes(query);
       const matchesMuscle =
         selectedMuscle === 'todos' || ex.muscleGroup === selectedMuscle;
       return matchesSearch && matchesMuscle;
@@ -66,7 +75,11 @@ export const ExerciseSelectModal: React.FC<ExerciseSelectModalProps> = ({
   };
 
   return (
-    <Modal visible={visible} animationType="slide" transparent={false}>
+    <Modal
+      visible={visible}
+      animationType="slide"
+      transparent={false}
+      onRequestClose={onClose}>
       <SafeAreaView style={styles.safeArea}>
         <View style={styles.header}>
           <TouchableOpacity onPress={onClose} style={styles.closeBtn}>

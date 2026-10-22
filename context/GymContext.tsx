@@ -55,6 +55,7 @@ interface GymContextType {
 
   // Body Metrics & InBody
   addBodyMetric: (metric: Omit<BodyMetricLog, 'id'>) => Promise<BodyMetricLog>;
+  updateBodyMetric: (id: string, updates: Partial<BodyMetricLog>) => Promise<void>;
   deleteBodyMetric: (id: string) => Promise<void>;
 
   // Progress Photos
@@ -246,13 +247,18 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             const exInfo = exercises.find((e) => e.id === exId);
             if (!exInfo) return null;
 
+            // Get template config if defined
+            const cfg = template.exerciseConfigs?.find((c) => c.exerciseId === exId);
+
             // Get last session set values for helpful placeholder
             const lastSessionExercise = StorageService.getLastSessionExercise(sessions, exId);
-            const defaultWeight = lastSessionExercise?.sets?.[0]?.weightKg || 20;
-            const defaultReps = lastSessionExercise?.sets?.[0]?.reps || 10;
+            const defaultWeight = cfg?.targetWeightKg ?? (lastSessionExercise?.sets?.[0]?.weightKg || 20);
+            const defaultReps = cfg?.targetReps ?? (lastSessionExercise?.sets?.[0]?.reps || 10);
+            const targetSetsCount = cfg?.targetSets || 3;
+            const restSeconds = cfg?.restSeconds || exInfo.defaultRestSeconds || 90;
 
-            const sets: WorkoutSet[] = [1, 2, 3].map((num) => ({
-              id: `set-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+            const sets: WorkoutSet[] = Array.from({ length: targetSetsCount }, (_, i) => i + 1).map((num) => ({
+              id: `set-${Date.now()}-${Math.random().toString(36).substring(2, 7)}-${num}`,
               setNumber: num,
               type: 'normal',
               weightKg: defaultWeight,
@@ -269,6 +275,7 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               exerciseName: exInfo.name,
               muscleGroup: exInfo.muscleGroup,
               equipment: exInfo.equipment,
+              restSeconds,
               sets,
             };
           })
@@ -393,6 +400,7 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         exerciseName: exercise.name,
         muscleGroup: exercise.muscleGroup,
         equipment: exercise.equipment,
+        restSeconds: exercise.defaultRestSeconds || 90,
         sets: [
           {
             id: `s-${Date.now()}-1`,
@@ -596,6 +604,14 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     [bodyMetrics]
   );
 
+  const updateBodyMetric = useCallback(
+    async (id: string, updates: Partial<BodyMetricLog>) => {
+      const updated = await StorageService.updateBodyMetric(id, updates);
+      setBodyMetrics(updated);
+    },
+    []
+  );
+
   const deleteBodyMetric = useCallback(
     async (id: string) => {
       const updated = bodyMetrics.filter((m) => m.id !== id);
@@ -632,7 +648,9 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, []);
 
   const completeCurrentSetAndRest = useCallback(
-    (workoutExerciseId: string, setId: string, restSeconds = 90) => {
+    (workoutExerciseId: string, setId: string, overrideRestSeconds?: number) => {
+      let finalRest = overrideRestSeconds;
+
       setActiveSession((prev) => {
         if (!prev) return null;
         let lastWeight = 0;
@@ -640,6 +658,10 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
         const updatedExercises = prev.exercises.map((ex) => {
           if (ex.id !== workoutExerciseId) return ex;
+
+          if (!finalRest) {
+            finalRest = ex.restSeconds || 90;
+          }
 
           const currentIdx = ex.sets.findIndex((s) => s.id === setId);
           if (currentIdx === -1) return ex;
@@ -670,7 +692,7 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
 
       // Start the rest timer countdown
-      startRestTimer(restSeconds);
+      startRestTimer(finalRest || 90);
     },
     [startRestTimer]
   );
@@ -775,6 +797,7 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addCustomExercise,
         deleteExercise,
         addBodyMetric,
+        updateBodyMetric,
         deleteBodyMetric,
         progressPhotos,
         addProgressPhoto,

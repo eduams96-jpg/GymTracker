@@ -1,10 +1,12 @@
 import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useGym } from '../context/GymContext';
 import GymTheme from '../constants/theme';
 
 export const RestTimerOverlay: React.FC = () => {
+  const insets = useSafeAreaInsets();
   const {
     restTimer,
     adjustRestTimer,
@@ -26,13 +28,15 @@ export const RestTimerOverlay: React.FC = () => {
   );
 
   const isLast3Seconds = restTimer.remainingSeconds > 0 && restTimer.remainingSeconds <= 3;
+  const safeBottom = Math.max(insets.bottom, 24);
+  const bottomOffset = activeSession ? safeBottom + 125 : safeBottom + 70;
 
   return (
     <View
       style={[
         styles.container,
         isLast3Seconds && styles.containerUrgent,
-        { bottom: activeSession ? 110 : 75 },
+        { bottom: bottomOffset },
       ]}>
       <View style={styles.content}>
         <View style={styles.left}>

@@ -8,6 +8,7 @@ export const DEFAULT_EXERCISES: Exercise[] = [
     muscleGroup: 'peito',
     equipment: 'barra',
     instructions: 'Deita-te no banco, pés firmes no chão, desce a barra até ao peito e empurra com força controlada.',
+    defaultRestSeconds: 120,
   },
   {
     id: 'ex-incline-db-press',
@@ -15,6 +16,7 @@ export const DEFAULT_EXERCISES: Exercise[] = [
     muscleGroup: 'peito',
     equipment: 'halteres',
     instructions: 'Banco a 30-45 graus. Foco na porção clavicular (superior) do peitoral.',
+    defaultRestSeconds: 90,
   },
   {
     id: 'ex-cable-crossover',
@@ -22,6 +24,7 @@ export const DEFAULT_EXERCISES: Exercise[] = [
     muscleGroup: 'peito',
     equipment: 'cabos',
     instructions: 'Cotovelos ligeiramente fletidos, aperta o peito no ponto de contração máxima.',
+    defaultRestSeconds: 60,
   },
   {
     id: 'ex-chest-dips',
@@ -29,6 +32,7 @@ export const DEFAULT_EXERCISES: Exercise[] = [
     muscleGroup: 'peito',
     equipment: 'peso_corporal',
     instructions: 'Inclina o tronco para a frente para enfatizar a parte inferior do peitoral.',
+    defaultRestSeconds: 90,
   },
 
   // COSTAS
@@ -38,6 +42,7 @@ export const DEFAULT_EXERCISES: Exercise[] = [
     muscleGroup: 'costas',
     equipment: 'barra',
     instructions: 'Coluna neutra, ativa o core e os dorsais, puxa o peso usando a cadeia posterior.',
+    defaultRestSeconds: 150,
   },
   {
     id: 'ex-lat-pulldown',
@@ -45,6 +50,7 @@ export const DEFAULT_EXERCISES: Exercise[] = [
     muscleGroup: 'costas',
     equipment: 'cabos',
     instructions: 'Puxa a barra em direção ao topo do peito mantendo os ombros recuados.',
+    defaultRestSeconds: 90,
   },
   {
     id: 'ex-barbell-row',
@@ -52,6 +58,7 @@ export const DEFAULT_EXERCISES: Exercise[] = [
     muscleGroup: 'costas',
     equipment: 'barra',
     instructions: 'Tronco inclinado a 45º, puxa a barra ao umbigo contraindo as escápulas.',
+    defaultRestSeconds: 120,
   },
   {
     id: 'ex-seated-cable-row',
@@ -59,6 +66,7 @@ export const DEFAULT_EXERCISES: Exercise[] = [
     muscleGroup: 'costas',
     equipment: 'cabos',
     instructions: 'Mantém as costas direitas e aperta os dorsais a cada repetição.',
+    defaultRestSeconds: 90,
   },
 
   // PERNAS
@@ -68,6 +76,7 @@ export const DEFAULT_EXERCISES: Exercise[] = [
     muscleGroup: 'pernas',
     equipment: 'barra',
     instructions: 'Pés à largura dos ombros, desce até que as coxas quebrem a linha paralela.',
+    defaultRestSeconds: 150,
   },
   {
     id: 'ex-leg-press',
@@ -75,6 +84,7 @@ export const DEFAULT_EXERCISES: Exercise[] = [
     muscleGroup: 'pernas',
     equipment: 'maquina',
     instructions: 'Pés na plataforma, desce até 90 graus sem levantar o quadril do encosto.',
+    defaultRestSeconds: 120,
   },
   {
     id: 'ex-romanian-deadlift',
@@ -82,6 +92,7 @@ export const DEFAULT_EXERCISES: Exercise[] = [
     muscleGroup: 'pernas',
     equipment: 'halteres',
     instructions: 'Joelhos semirrígidos, projeta o quadril para trás sentindo os isquiotibiais.',
+    defaultRestSeconds: 120,
   },
   {
     id: 'ex-leg-extension',
@@ -89,6 +100,7 @@ export const DEFAULT_EXERCISES: Exercise[] = [
     muscleGroup: 'pernas',
     equipment: 'maquina',
     instructions: 'Extensão controlada do joelho com contração de 1 segundo no topo.',
+    defaultRestSeconds: 60,
   },
   {
     id: 'ex-calf-raise',
@@ -96,6 +108,7 @@ export const DEFAULT_EXERCISES: Exercise[] = [
     muscleGroup: 'pernas',
     equipment: 'maquina',
     instructions: 'Amplitude total: desce bem o calcanhar e sobe até à ponta dos pés.',
+    defaultRestSeconds: 60,
   },
 
   // OMBROS
@@ -105,6 +118,7 @@ export const DEFAULT_EXERCISES: Exercise[] = [
     muscleGroup: 'ombros',
     equipment: 'barra',
     instructions: 'Empurra a barra para cima da cabeça, bloqueando os braços com estabilidade.',
+    defaultRestSeconds: 120,
   },
   {
     id: 'ex-lateral-raise',
@@ -112,6 +126,7 @@ export const DEFAULT_EXERCISES: Exercise[] = [
     muscleGroup: 'ombros',
     equipment: 'halteres',
     instructions: 'Eleva os braços até à linha dos ombros focando no deltoide lateral.',
+    defaultRestSeconds: 60,
   },
   {
     id: 'ex-face-pull',
@@ -119,6 +134,7 @@ export const DEFAULT_EXERCISES: Exercise[] = [
     muscleGroup: 'ombros',
     equipment: 'cabos',
     instructions: 'Puxa a corda em direção aos olhos rodando os ombros externamente.',
+    defaultRestSeconds: 60,
   },
 
   // BRAÇOS (BÍCEPS & TRÍCEPS)
@@ -128,6 +144,7 @@ export const DEFAULT_EXERCISES: Exercise[] = [
     muscleGroup: 'biceps',
     equipment: 'barra',
     instructions: 'Cotovelos junto ao corpo, flete os braços sem balançar o tronco.',
+    defaultRestSeconds: 75,
   },
   {
     id: 'ex-hammer-curl',
@@ -135,6 +152,7 @@ export const DEFAULT_EXERCISES: Exercise[] = [
     muscleGroup: 'biceps',
     equipment: 'halteres',
     instructions: 'Palmas voltadas para dentro, trabalha o braquial e antebraço.',
+    defaultRestSeconds: 60,
   },
   {
     id: 'ex-triceps-rope-pushdown',
@@ -142,6 +160,7 @@ export const DEFAULT_EXERCISES: Exercise[] = [
     muscleGroup: 'triceps',
     equipment: 'cabos',
     instructions: 'Abre a corda em baixo para contrair a cabeça lateral do tríceps.',
+    defaultRestSeconds: 60,
   },
   {
     id: 'ex-skull-crusher',
@@ -149,6 +168,7 @@ export const DEFAULT_EXERCISES: Exercise[] = [
     muscleGroup: 'triceps',
     equipment: 'barra',
     instructions: 'Deitado no banco, desce a barra até à testa mantendo os cotovelos fixos.',
+    defaultRestSeconds: 75,
   },
 
   // ABDOMINAIS
@@ -158,6 +178,7 @@ export const DEFAULT_EXERCISES: Exercise[] = [
     muscleGroup: 'abdominais',
     equipment: 'peso_corporal',
     instructions: 'Pendurado na barra, eleva os joelhos ou pernas em direção ao peito.',
+    defaultRestSeconds: 60,
   },
   {
     id: 'ex-cable-crunch',
@@ -165,6 +186,7 @@ export const DEFAULT_EXERCISES: Exercise[] = [
     muscleGroup: 'abdominais',
     equipment: 'cabos',
     instructions: 'De joelhos, curva a coluna lombar aproximando os cotovelos das coxas.',
+    defaultRestSeconds: 60,
   },
 ];
 
@@ -181,6 +203,13 @@ export const DEFAULT_TEMPLATES: WorkoutTemplate[] = [
       'ex-lateral-raise',
       'ex-triceps-rope-pushdown',
     ],
+    exerciseConfigs: [
+      { exerciseId: 'ex-bench-press', targetSets: 4, targetReps: 8, restSeconds: 120 },
+      { exerciseId: 'ex-incline-db-press', targetSets: 3, targetReps: 10, restSeconds: 90 },
+      { exerciseId: 'ex-overhead-press', targetSets: 3, targetReps: 8, restSeconds: 120 },
+      { exerciseId: 'ex-lateral-raise', targetSets: 4, targetReps: 12, restSeconds: 60 },
+      { exerciseId: 'ex-triceps-rope-pushdown', targetSets: 3, targetReps: 12, restSeconds: 60 },
+    ],
   },
   {
     id: 'tpl-pull',
@@ -193,6 +222,13 @@ export const DEFAULT_TEMPLATES: WorkoutTemplate[] = [
       'ex-barbell-row',
       'ex-face-pull',
       'ex-biceps-curl-bb',
+    ],
+    exerciseConfigs: [
+      { exerciseId: 'ex-deadlift', targetSets: 4, targetReps: 6, restSeconds: 150 },
+      { exerciseId: 'ex-lat-pulldown', targetSets: 3, targetReps: 10, restSeconds: 90 },
+      { exerciseId: 'ex-barbell-row', targetSets: 3, targetReps: 8, restSeconds: 120 },
+      { exerciseId: 'ex-face-pull', targetSets: 4, targetReps: 15, restSeconds: 60 },
+      { exerciseId: 'ex-biceps-curl-bb', targetSets: 3, targetReps: 10, restSeconds: 75 },
     ],
   },
   {
@@ -208,6 +244,14 @@ export const DEFAULT_TEMPLATES: WorkoutTemplate[] = [
       'ex-calf-raise',
       'ex-hanging-leg-raise',
     ],
+    exerciseConfigs: [
+      { exerciseId: 'ex-squat', targetSets: 4, targetReps: 8, restSeconds: 150 },
+      { exerciseId: 'ex-leg-press', targetSets: 3, targetReps: 10, restSeconds: 120 },
+      { exerciseId: 'ex-romanian-deadlift', targetSets: 3, targetReps: 10, restSeconds: 120 },
+      { exerciseId: 'ex-leg-extension', targetSets: 3, targetReps: 12, restSeconds: 60 },
+      { exerciseId: 'ex-calf-raise', targetSets: 4, targetReps: 15, restSeconds: 60 },
+      { exerciseId: 'ex-hanging-leg-raise', targetSets: 3, targetReps: 15, restSeconds: 60 },
+    ],
   },
   {
     id: 'tpl-fullbody',
@@ -220,6 +264,13 @@ export const DEFAULT_TEMPLATES: WorkoutTemplate[] = [
       'ex-lat-pulldown',
       'ex-overhead-press',
       'ex-biceps-curl-bb',
+    ],
+    exerciseConfigs: [
+      { exerciseId: 'ex-squat', targetSets: 3, targetReps: 8, restSeconds: 150 },
+      { exerciseId: 'ex-bench-press', targetSets: 3, targetReps: 8, restSeconds: 120 },
+      { exerciseId: 'ex-lat-pulldown', targetSets: 3, targetReps: 10, restSeconds: 90 },
+      { exerciseId: 'ex-overhead-press', targetSets: 3, targetReps: 10, restSeconds: 120 },
+      { exerciseId: 'ex-biceps-curl-bb', targetSets: 3, targetReps: 12, restSeconds: 75 },
     ],
   },
 ];

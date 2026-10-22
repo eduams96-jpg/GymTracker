@@ -1,11 +1,16 @@
 import React from 'react';
 import { Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import GymTheme from '../../constants/theme';
 import { ActiveWorkoutBanner } from '../../components/ActiveWorkoutBanner';
 import { View } from 'react-native';
 
 export default function TabLayout() {
+  const insets = useSafeAreaInsets();
+  const tabBottom = Math.max(insets.bottom, 12);
+  const tabHeight = 54 + tabBottom;
+
   return (
     <View style={{ flex: 1, backgroundColor: GymTheme.colors.background }}>
       <ActiveWorkoutBanner />
@@ -17,9 +22,9 @@ export default function TabLayout() {
             backgroundColor: GymTheme.colors.card,
             borderTopColor: GymTheme.colors.border,
             borderTopWidth: 1,
-            height: 60,
-            paddingBottom: 8,
-            paddingTop: 8,
+            height: tabHeight,
+            paddingBottom: tabBottom,
+            paddingTop: 6,
           },
           tabBarLabelStyle: {
             fontSize: 11,

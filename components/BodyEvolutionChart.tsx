@@ -79,6 +79,7 @@ export const BodyEvolutionChart: React.FC<BodyEvolutionChartProps> = ({
   const firstVal = values[0];
   const lastVal = values[values.length - 1];
   const diff = Number((lastVal - firstVal).toFixed(1));
+  const pctChange = firstVal > 0 ? Number((((lastVal - firstVal) / firstVal) * 100).toFixed(1)) : 0;
 
   return (
     <View style={styles.card}>
@@ -119,7 +120,7 @@ export const BodyEvolutionChart: React.FC<BodyEvolutionChartProps> = ({
                       : GymTheme.colors.danger,
                 },
               ]}>
-              {diff >= 0 ? `+${diff}` : `${diff}`} {unit}
+              {diff >= 0 ? `+${diff}` : `${diff}`} {unit} ({pctChange >= 0 ? `+${pctChange}` : `${pctChange}`}%)
             </Text>
           </View>
         )}

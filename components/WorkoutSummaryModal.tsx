@@ -22,7 +22,11 @@ export const WorkoutSummaryModal: React.FC<WorkoutSummaryModalProps> = ({
   const timeFormatted = `${minutes}m ${seconds}s`;
 
   return (
-    <Modal visible={visible} animationType="fade" transparent>
+    <Modal
+      visible={visible}
+      animationType="fade"
+      transparent
+      onRequestClose={onClose}>
       <View style={styles.overlay}>
         <View style={styles.modalBox}>
           {/* Trophy badge */}

@@ -58,7 +58,11 @@ export const OneRepMaxCalculatorModal: React.FC<OneRepMaxCalculatorModalProps> =
   ];
 
   return (
-    <Modal visible={visible} animationType="slide" transparent={false}>
+    <Modal
+      visible={visible}
+      animationType="slide"
+      transparent={false}
+      onRequestClose={onClose}>
       <SafeAreaView style={styles.safeArea}>
         {/* Header */}
         <View style={styles.header}>

@@ -8,6 +8,8 @@ import {
   Alert,
   TextInput,
   Modal,
+  BackHandler,
+  StatusBar,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -114,6 +116,7 @@ export default function ActiveWorkoutScreen() {
     set: WorkoutSet;
     setIndex: number;
     totalSetsInExercise: number;
+    restSeconds: number;
   } | null = null;
 
   for (const ex of activeSession.exercises) {
@@ -125,6 +128,7 @@ export default function ActiveWorkoutScreen() {
         set: ex.sets[setIdx],
         setIndex: setIdx + 1,
         totalSetsInExercise: ex.sets.length,
+        restSeconds: ex.restSeconds || 90,
       };
       break;
     }
@@ -172,6 +176,16 @@ export default function ActiveWorkoutScreen() {
     );
   };
 
+  // Support Android Back Gesture / hardware back button smoothly
+  useEffect(() => {
+    const onBackPress = () => {
+      handleCancel();
+      return true;
+    };
+    const sub = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+    return () => sub.remove();
+  }, [handleCancel]);
+
   const openNoteEditor = (exerciseId: string, currentNotes?: string) => {
     setEditingNoteExerciseId(exerciseId);
     setNoteText(currentNotes || '');
@@ -191,13 +205,13 @@ export default function ActiveWorkoutScreen() {
   };
 
   return (
-    <View style={[styles.container, { paddingTop: Math.max(insets.top + 6, 28) }]}>
+    <View style={[styles.container, { paddingTop: Math.max(insets.top, StatusBar.currentHeight || 0) + 16 }]}>
       {/* Top Bar with comfortable breathing room from Android status bar */}
       <View style={styles.topBar}>
         <TouchableOpacity
-          onPress={() => router.back()}
+          onPress={handleCancel}
           style={styles.iconBtn}
-          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
+          hitSlop={{ top: 16, bottom: 16, left: 16, right: 16 }}>
           <Ionicons name="chevron-down" size={28} color={GymTheme.colors.textPrimary} />
         </TouchableOpacity>
 
@@ -215,14 +229,15 @@ export default function ActiveWorkoutScreen() {
           <TouchableOpacity
             style={styles.calcIconBtn}
             onPress={() => setIs1RMModalOpen(true)}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}>
             <Ionicons name="calculator-outline" size={20} color={GymTheme.colors.accent} />
           </TouchableOpacity>
 
           <TouchableOpacity
             style={styles.finishBtn}
             onPress={handleFinish}
-            activeOpacity={0.8}>
+            activeOpacity={0.8}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
             <Text style={styles.finishBtnText}>Concluir</Text>
           </TouchableOpacity>
         </View>
@@ -403,7 +418,11 @@ export default function ActiveWorkoutScreen() {
       />
 
       {/* Calorie Edit Modal */}
-      <Modal visible={isEditingCalories} transparent animationType="fade">
+      <Modal
+        visible={isEditingCalories}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setIsEditingCalories(false)}>
         <View style={styles.noteModalOverlay}>
           <View style={styles.noteModalCard}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
@@ -446,7 +465,11 @@ export default function ActiveWorkoutScreen() {
       </Modal>
 
       {/* Note Editing Modal */}
-      <Modal visible={!!editingNoteExerciseId} transparent animationType="fade">
+      <Modal
+        visible={!!editingNoteExerciseId}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setEditingNoteExerciseId(null)}>
         <View style={styles.noteModalOverlay}>
           <View style={styles.noteModalCard}>
             <Text style={styles.noteModalTitle}>Nota do Exercício</Text>
@@ -481,7 +504,7 @@ export default function ActiveWorkoutScreen() {
 
       {/* Guided Bottom Bar ("Botão Grande em Baixo") */}
       {activeFocusTarget ? (
-        <View style={[styles.bottomActionBar, { paddingBottom: Math.max(insets.bottom, 10) }]}>
+        <View style={[styles.bottomActionBar, { paddingBottom: Math.max(insets.bottom, 28) + 14 }]}>
           <View style={styles.bottomTargetInfo}>
             <View style={styles.bottomTargetLeft}>
               <View style={styles.bottomPulseDot} />
@@ -533,7 +556,7 @@ export default function ActiveWorkoutScreen() {
                 completeCurrentSetAndRest(
                   activeFocusTarget!.workoutExerciseId,
                   activeFocusTarget!.set.id,
-                  90
+                  activeFocusTarget!.restSeconds
                 );
               }}>
               <View style={styles.bigGuidedBtnIcon}>
@@ -544,7 +567,7 @@ export default function ActiveWorkoutScreen() {
                   Concluir & Descansar
                 </Text>
                 <Text style={styles.bigGuidedBtnSub} numberOfLines={1}>
-                  {activeFocusTarget.set.weightKg > 0 ? `${activeFocusTarget.set.weightKg}kg` : '0kg'} × {activeFocusTarget.set.reps > 0 ? `${activeFocusTarget.set.reps}r` : '0r'} • 90s ⏱️
+                  {activeFocusTarget.set.weightKg > 0 ? `${activeFocusTarget.set.weightKg}kg` : '0kg'} × {activeFocusTarget.set.reps > 0 ? `${activeFocusTarget.set.reps}r` : '0r'} • {activeFocusTarget.restSeconds || 90}s ⏱️
                 </Text>
               </View>
               <Ionicons name="arrow-forward-circle" size={24} color="#022c22" />
@@ -581,7 +604,7 @@ export default function ActiveWorkoutScreen() {
           </View>
         </View>
       ) : allSetsCompleted ? (
-        <View style={[styles.bottomActionBar, { paddingBottom: Math.max(insets.bottom, 10) }]}>
+        <View style={[styles.bottomActionBar, { paddingBottom: Math.max(insets.bottom, 28) + 14 }]}>
           <TouchableOpacity
             style={styles.allDoneBtn}
             activeOpacity={0.85}
@@ -712,7 +735,7 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     padding: 16,
-    paddingBottom: 100,
+    paddingBottom: 220,
     gap: 16,
   },
   exerciseCard: {

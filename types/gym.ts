@@ -25,6 +25,7 @@ export interface Exercise {
   equipment: EquipmentType;
   instructions?: string;
   isCustom?: boolean;
+  defaultRestSeconds?: number;
 }
 
 export interface WorkoutSet {
@@ -45,7 +46,16 @@ export interface WorkoutExercise {
   equipment: EquipmentType;
   notes?: string;
   supersetGroupId?: string; // Grouping ID for supersets (ex: "ss-1")
+  restSeconds?: number;
   sets: WorkoutSet[];
+}
+
+export interface TemplateExerciseConfig {
+  exerciseId: string;
+  targetSets: number;
+  targetReps: number;
+  targetWeightKg?: number;
+  restSeconds?: number;
 }
 
 export interface WorkoutTemplate {
@@ -54,6 +64,8 @@ export interface WorkoutTemplate {
   description?: string;
   targetMuscles: MuscleGroup[];
   exerciseIds: string[];
+  exerciseConfigs?: TemplateExerciseConfig[];
+  isCustom?: boolean;
   lastPerformed?: string; // ISO date
 }
 
