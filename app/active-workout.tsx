@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   View,
   Text,
@@ -71,10 +71,14 @@ export default function ActiveWorkoutScreen() {
     return () => clearInterval(interval);
   }, [activeSession]);
 
-  const latestWeightKg = bodyMetrics && bodyMetrics.length > 0 ? bodyMetrics[0].weightKg : 80;
+  const latestWeightKg = useMemo(() => {
+    if (!bodyMetrics || bodyMetrics.length === 0) return 80;
+    const sorted = [...bodyMetrics].sort((a, b) => b.timestamp - a.timestamp);
+    return sorted[0]?.weightKg || 80;
+  }, [bodyMetrics]);
 
   const autoCalories = useMemo(() => {
-    // Estimativa metabólica realista (MET 6.0 para treino com pesos), indexada ao peso do InBody:
+    // Estimativa metabólica realista (MET 6.0 para treino com pesos), indexada ao peso mais recente do InBody:
     const kcalPerMin = (6.0 * 3.5 * latestWeightKg) / 200;
     return Math.max(1, Math.round((elapsedSeconds / 60) * kcalPerMin));
   }, [elapsedSeconds, latestWeightKg]);
@@ -92,17 +96,99 @@ export default function ActiveWorkoutScreen() {
     }, 0);
   }, [activeSession]);
 
+  const handleFinish = useCallback(async () => {
+    if (!activeSession) return;
+    const hasCompletedSets = activeSession.exercises.some((e) =>
+      e.sets.some((s) => s.completed)
+    );
+
+    if (!hasCompletedSets) {
+      Alert.alert(
+        'Nenhuma série concluída',
+        'Marca pelo menos uma série como concluída (✓) antes de finalizar.',
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+
+    const summary = await finishWorkout(currentCalories);
+    if (summary) {
+      setCompletedSummarySession(summary);
+    }
+  }, [activeSession, finishWorkout, currentCalories]);
+
+  const handleCancel = useCallback(() => {
+    Alert.alert(
+      'Descartar Treino',
+      'Tens a certeza que desejas cancelar este treino? Os dados desta sessão serão perdidos.',
+      [
+        { text: 'Continuar Treino', style: 'cancel' },
+        {
+          text: 'Descartar',
+          style: 'destructive',
+          onPress: () => {
+            cancelWorkout();
+            router.replace('/(tabs)');
+          },
+        },
+      ]
+    );
+  }, [cancelWorkout, router]);
+
+  const handleSummaryClose = useCallback(() => {
+    setCompletedSummarySession(null);
+    router.replace('/(tabs)/history');
+  }, [router]);
+
+  // Support Android Back Gesture / hardware back button smoothly across entire screen lifecycle
+  useEffect(() => {
+    const onBackPress = () => {
+      if (completedSummarySession) {
+        handleSummaryClose();
+        return true;
+      }
+      if (activeSession) {
+        handleCancel();
+        return true;
+      }
+      return false;
+    };
+    const sub = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+    return () => sub.remove();
+  }, [activeSession, completedSummarySession, handleCancel, handleSummaryClose]);
+
+  const openNoteEditor = useCallback((exerciseId: string, currentNotes?: string) => {
+    setEditingNoteExerciseId(exerciseId);
+    setNoteText(currentNotes || '');
+  }, []);
+
+  const saveNote = useCallback(() => {
+    if (editingNoteExerciseId) {
+      updateExerciseNotes(editingNoteExerciseId, noteText.trim());
+      setEditingNoteExerciseId(null);
+      setNoteText('');
+    }
+  }, [editingNoteExerciseId, noteText, updateExerciseNotes]);
+
   if (!activeSession) {
     return (
       <View style={[styles.container, { paddingTop: Math.max(insets.top, 24) }]}>
-        <View style={styles.noWorkoutContainer}>
-          <Text style={styles.noWorkoutText}>Nenhum treino ativo de momento.</Text>
-          <TouchableOpacity
-            style={styles.backBtn}
-            onPress={() => router.replace('/(tabs)')}>
-            <Text style={styles.backBtnText}>Voltar ao Início</Text>
-          </TouchableOpacity>
-        </View>
+        {completedSummarySession ? (
+          <WorkoutSummaryModal
+            session={completedSummarySession}
+            visible={!!completedSummarySession}
+            onClose={handleSummaryClose}
+          />
+        ) : (
+          <View style={styles.noWorkoutContainer}>
+            <Text style={styles.noWorkoutText}>Nenhum treino ativo de momento.</Text>
+            <TouchableOpacity
+              style={styles.backBtn}
+              onPress={() => router.replace('/(tabs)')}>
+              <Text style={styles.backBtnText}>Voltar ao Início</Text>
+            </TouchableOpacity>
+          </View>
+        )}
       </View>
     );
   }
@@ -143,72 +229,6 @@ export default function ActiveWorkoutScreen() {
   const allSetsCompleted =
     activeSession.exercises.length > 0 &&
     activeSession.exercises.every((e) => e.sets.every((s) => s.completed));
-
-  const handleFinish = async () => {
-    const hasCompletedSets = activeSession.exercises.some((e) =>
-      e.sets.some((s) => s.completed)
-    );
-
-    if (!hasCompletedSets) {
-      Alert.alert(
-        'Nenhuma série concluída',
-        'Marca pelo menos uma série como concluída (✓) antes de finalizar.',
-        [{ text: 'OK' }]
-      );
-      return;
-    }
-
-    const summary = await finishWorkout(currentCalories);
-    if (summary) {
-      setCompletedSummarySession(summary);
-    }
-  };
-
-  const handleCancel = () => {
-    Alert.alert(
-      'Descartar Treino',
-      'Tens a certeza que desejas cancelar este treino? Os dados desta sessão serão perdidos.',
-      [
-        { text: 'Continuar Treino', style: 'cancel' },
-        {
-          text: 'Descartar',
-          style: 'destructive',
-          onPress: () => {
-            cancelWorkout();
-            router.replace('/(tabs)');
-          },
-        },
-      ]
-    );
-  };
-
-  // Support Android Back Gesture / hardware back button smoothly
-  useEffect(() => {
-    const onBackPress = () => {
-      handleCancel();
-      return true;
-    };
-    const sub = BackHandler.addEventListener('hardwareBackPress', onBackPress);
-    return () => sub.remove();
-  }, [handleCancel]);
-
-  const openNoteEditor = (exerciseId: string, currentNotes?: string) => {
-    setEditingNoteExerciseId(exerciseId);
-    setNoteText(currentNotes || '');
-  };
-
-  const saveNote = () => {
-    if (editingNoteExerciseId) {
-      updateExerciseNotes(editingNoteExerciseId, noteText.trim());
-      setEditingNoteExerciseId(null);
-      setNoteText('');
-    }
-  };
-
-  const handleSummaryClose = () => {
-    setCompletedSummarySession(null);
-    router.replace('/(tabs)/history');
-  };
 
   return (
     <View style={[styles.container, { paddingTop: Math.max(insets.top, StatusBar.currentHeight || 0) + 16 }]}>

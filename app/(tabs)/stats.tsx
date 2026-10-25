@@ -17,7 +17,14 @@ import { OneRepMaxCalculatorModal } from '../../components/OneRepMaxCalculatorMo
 import GymTheme from '../../constants/theme';
 
 export default function StatsScreen() {
-  const { sessions, personalRecords, exportBackup, restoreBackup, resetAllData } = useGym();
+  const {
+    sessions,
+    personalRecords,
+    exportBackup,
+    restoreBackup,
+    markBackupSaved,
+    resetAllData,
+  } = useGym();
 
   const [is1RMModalOpen, setIs1RMModalOpen] = useState(false);
   const [isRestoreModalOpen, setIsRestoreModalOpen] = useState(false);
@@ -66,7 +73,36 @@ export default function StatsScreen() {
     return days;
   }, [workoutDaysSet]);
 
-  // Volume Semanal por Grupo Muscular
+  const workoutsIn14Days = useMemo(
+    () => last14Days.filter((d) => d.hasWorkout).length,
+    [last14Days]
+  );
+
+  // Consecutive days streak (either ending today or yesterday)
+  const currentStreak = useMemo(() => {
+    let count = 0;
+    const checkDate = new Date();
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const todayKey = `${checkDate.getFullYear()}-${pad(checkDate.getMonth() + 1)}-${pad(checkDate.getDate())}`;
+
+    // If no workout today, check if yesterday had one to maintain streak
+    if (!workoutDaysSet.has(todayKey)) {
+      checkDate.setDate(checkDate.getDate() - 1);
+    }
+
+    while (true) {
+      const key = `${checkDate.getFullYear()}-${pad(checkDate.getMonth() + 1)}-${pad(checkDate.getDate())}`;
+      if (workoutDaysSet.has(key)) {
+        count++;
+        checkDate.setDate(checkDate.getDate() - 1);
+      } else {
+        break;
+      }
+    }
+    return count;
+  }, [workoutDaysSet]);
+
+  // Volume Semanal por Grupo Muscular (apenas séries de trabalho)
   const weeklyMuscleSets = useMemo(() => {
     const cutoff = Date.now() - 7 * 86400000;
     const recent = sessions.filter((s) => s.startTime >= cutoff);
@@ -82,7 +118,9 @@ export default function StatsScreen() {
 
     for (const s of recent) {
       for (const ex of s.exercises) {
-        const completed = ex.sets.filter((st) => st.completed).length;
+        const completed = ex.sets.filter(
+          (st) => st.completed && st.type !== 'warmup' && st.reps > 0
+        ).length;
         if (counts[ex.muscleGroup] !== undefined) {
           counts[ex.muscleGroup] += completed;
         }
@@ -120,7 +158,22 @@ export default function StatsScreen() {
   const handleExport = async () => {
     try {
       const success = await exportBackup();
-      if (!success) {
+      if (success) {
+        Alert.alert(
+          'Cópia de Segurança',
+          'A janela de partilha foi aberta. Conseguiste guardar o ficheiro com sucesso?',
+          [
+            { text: 'Ainda não', style: 'cancel' },
+            {
+              text: 'Sim, guardei',
+              onPress: async () => {
+                await markBackupSaved();
+                Alert.alert('Sucesso', 'Data da última cópia de segurança registada!');
+              },
+            },
+          ]
+        );
+      } else {
         Alert.alert('Exportação', 'Não foi possível aceder à partilha de ficheiros.');
       }
     } catch {
@@ -227,7 +280,10 @@ export default function StatsScreen() {
             <Ionicons name="flame" size={20} color={GymTheme.colors.accent} />
             <Text style={styles.sectionTitle}>Atividade Recente (14 Dias)</Text>
           </View>
-          <Text style={styles.prCount}>{workoutDaysSet.size} dias treinados</Text>
+          <Text style={styles.prCount}>
+            {currentStreak > 1 ? `🔥 ${currentStreak}d seguidos • ` : ''}
+            {workoutsIn14Days} de 14 dias
+          </Text>
         </View>
 
         <View style={styles.calendarCard}>
@@ -422,7 +478,11 @@ export default function StatsScreen() {
       />
 
       {/* Restore Backup Modal */}
-      <Modal visible={isRestoreModalOpen} transparent animationType="fade">
+      <Modal
+        visible={isRestoreModalOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setIsRestoreModalOpen(false)}>
         <View style={styles.restoreOverlay}>
           <View style={styles.restoreCard}>
             <Text style={styles.restoreTitle}>Restaurar Cópia de Segurança</Text>

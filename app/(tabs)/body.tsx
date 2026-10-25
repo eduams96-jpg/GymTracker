@@ -49,24 +49,35 @@ export default function BodyTrackingScreen() {
     return `${day}/${month}/${year}`;
   };
 
-  const parseDatePT = (str: string): number => {
+  const parseDatePT = (str: string): number | null => {
     const parts = str.trim().split(/[/\-.]/);
     if (parts.length === 3) {
+      let day = 0,
+        month = 0,
+        year = 0;
       if (parts[0].length === 4) {
-        const y = parseInt(parts[0], 10);
-        const m = parseInt(parts[1], 10) - 1;
-        const d = parseInt(parts[2], 10);
-        const dt = new Date(y, m, d, 12, 0, 0);
-        if (!isNaN(dt.getTime())) return dt.getTime();
+        // YYYY-MM-DD
+        year = parseInt(parts[0], 10);
+        month = parseInt(parts[1], 10);
+        day = parseInt(parts[2], 10);
       } else {
-        const d = parseInt(parts[0], 10);
-        const m = parseInt(parts[1], 10) - 1;
-        const y = parseInt(parts[2], 10);
-        const dt = new Date(y, m, d, 12, 0, 0);
-        if (!isNaN(dt.getTime())) return dt.getTime();
+        // DD/MM/YYYY
+        day = parseInt(parts[0], 10);
+        month = parseInt(parts[1], 10);
+        year = parseInt(parts[2], 10);
+      }
+      if (year >= 1990 && year <= 2100 && month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+        const dt = new Date(year, month - 1, day, 12, 0, 0);
+        if (
+          dt.getFullYear() === year &&
+          dt.getMonth() === month - 1 &&
+          dt.getDate() === day
+        ) {
+          return dt.getTime();
+        }
       }
     }
-    return Date.now();
+    return null;
   };
 
   // Form state
@@ -236,6 +247,13 @@ export default function BodyTrackingScreen() {
     };
 
     const targetTimestamp = parseDatePT(evalDate);
+    if (!targetTimestamp) {
+      Alert.alert(
+        'Data inválida',
+        'Por favor insere uma data válida no formato DD/MM/AAAA (ex: 25/10/2026).'
+      );
+      return;
+    }
     const dateIso = new Date(targetTimestamp).toISOString();
 
     if (editingMetricId) {

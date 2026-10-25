@@ -76,6 +76,7 @@ interface GymContextType {
   resetAllData: () => Promise<void>;
   exportBackup: () => Promise<boolean>;
   restoreBackup: (jsonString: string) => Promise<boolean>;
+  markBackupSaved: () => Promise<void>;
   lastBackupAt: number | null;
 
   // Live PR alert during workout
@@ -763,20 +764,20 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     dismissRestTimer();
   }, [dismissRestTimer]);
 
+  const markBackupSaved = useCallback(async () => {
+    const now = Date.now();
+    setLastBackupAt(now);
+    await StorageService.setLastBackupAt(now);
+  }, []);
+
   const exportBackup = useCallback(async (): Promise<boolean> => {
-    const ok = await StorageService.shareBackupFile(
+    return await StorageService.shareBackupFile(
       exercises,
       templates,
       sessions,
       bodyMetrics,
       progressPhotos
     );
-    if (ok) {
-      const now = Date.now();
-      setLastBackupAt(now);
-      await StorageService.setLastBackupAt(now);
-    }
-    return ok;
   }, [exercises, templates, sessions, bodyMetrics, progressPhotos]);
 
   const restoreBackup = useCallback(async (jsonString: string): Promise<boolean> => {
@@ -787,10 +788,11 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setSessions(restored.sessions);
       setBodyMetrics(restored.bodyMetrics);
       setProgressPhotos(restored.progressPhotos);
+      await markBackupSaved();
       return true;
     }
     return false;
-  }, []);
+  }, [markBackupSaved]);
 
   const saveNewTemplate = useCallback(
     async (tpl: Omit<WorkoutTemplate, 'id'>): Promise<WorkoutTemplate> => {
@@ -879,6 +881,7 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         resetAllData,
         exportBackup,
         restoreBackup,
+        markBackupSaved,
         lastBackupAt,
         prAlert,
         dismissPRAlert,

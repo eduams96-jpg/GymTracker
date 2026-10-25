@@ -286,7 +286,11 @@ export default function ExercisesScreen() {
       />
 
       {/* Create Custom Exercise Modal */}
-      <Modal visible={isModalOpen} animationType="slide" transparent={false}>
+      <Modal
+        visible={isModalOpen}
+        animationType="slide"
+        transparent={false}
+        onRequestClose={() => setIsModalOpen(false)}>
         <SafeAreaView style={styles.modalSafeArea}>
           <View style={styles.modalHeader}>
             <TouchableOpacity onPress={() => setIsModalOpen(false)}>

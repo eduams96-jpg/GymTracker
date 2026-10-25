@@ -24,6 +24,7 @@ export default function WorkoutsScreen() {
     deleteTemplate,
     lastBackupAt,
     exportBackup,
+    markBackupSaved,
   } = useGym();
 
   // Backup reminder: show when there is data and no backup in the last 7 days
@@ -36,7 +37,22 @@ export default function WorkoutsScreen() {
 
   const handleQuickBackup = async () => {
     const ok = await exportBackup();
-    if (!ok) {
+    if (ok) {
+      Alert.alert(
+        'Cópia de Segurança',
+        'A janela de partilha foi aberta. Conseguiste guardar o ficheiro com sucesso?',
+        [
+          { text: 'Ainda não', style: 'cancel' },
+          {
+            text: 'Sim, guardei',
+            onPress: async () => {
+              await markBackupSaved();
+              Alert.alert('Sucesso', 'Data da última cópia de segurança registada!');
+            },
+          },
+        ]
+      );
+    } else {
       Alert.alert('Exportação', 'Não foi possível abrir a partilha de ficheiros.');
     }
   };
