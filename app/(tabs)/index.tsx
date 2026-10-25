@@ -15,7 +15,31 @@ import GymTheme from '../../constants/theme';
 
 export default function WorkoutsScreen() {
   const router = useRouter();
-  const { templates, exercises, startWorkout, activeSession, deleteTemplate } = useGym();
+  const {
+    templates,
+    exercises,
+    sessions,
+    startWorkout,
+    activeSession,
+    deleteTemplate,
+    lastBackupAt,
+    exportBackup,
+  } = useGym();
+
+  // Backup reminder: show when there is data and no backup in the last 7 days
+  const BACKUP_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
+  const daysSinceBackup = lastBackupAt
+    ? Math.floor((Date.now() - lastBackupAt) / (24 * 60 * 60 * 1000))
+    : null;
+  const needsBackup =
+    sessions.length > 0 && (!lastBackupAt || Date.now() - lastBackupAt > BACKUP_INTERVAL_MS);
+
+  const handleQuickBackup = async () => {
+    const ok = await exportBackup();
+    if (!ok) {
+      Alert.alert('Exportação', 'Não foi possível abrir a partilha de ficheiros.');
+    }
+  };
 
   const handleStartTemplate = (template: WorkoutTemplate) => {
     if (activeSession) {
@@ -65,11 +89,44 @@ export default function WorkoutsScreen() {
     );
   };
 
+  const openTemplateOptions = (template: WorkoutTemplate) => {
+    Alert.alert(template.title, 'O que queres fazer com esta rotina?', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Eliminar',
+        style: 'destructive',
+        onPress: () => confirmDeleteTemplate(template),
+      },
+      {
+        text: 'Editar',
+        onPress: () => router.push({ pathname: '/new-routine', params: { id: template.id } }),
+      },
+    ]);
+  };
+
   return (
     <ScrollView
       style={styles.container}
       contentContainerStyle={styles.contentContainer}
       showsVerticalScrollIndicator={false}>
+      {/* Backup reminder */}
+      {needsBackup && (
+        <View style={styles.backupBanner}>
+          <Ionicons name="cloud-upload-outline" size={22} color={GymTheme.colors.accent} />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.backupBannerTitle}>Faz uma cópia de segurança</Text>
+            <Text style={styles.backupBannerSub}>
+              {daysSinceBackup === null
+                ? 'Ainda não exportaste nenhuma cópia. Os dados só existem neste telemóvel.'
+                : `Última cópia há ${daysSinceBackup} dias. Guarda-a no Google Drive.`}
+            </Text>
+          </View>
+          <TouchableOpacity style={styles.backupBannerBtn} onPress={handleQuickBackup}>
+            <Text style={styles.backupBannerBtnText}>Exportar</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
       {/* Quick Start Section */}
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Início Rápido</Text>
@@ -122,7 +179,7 @@ export default function WorkoutsScreen() {
                     ) : null}
                   </View>
                   <TouchableOpacity
-                    onPress={() => confirmDeleteTemplate(tpl)}
+                    onPress={() => openTemplateOptions(tpl)}
                     hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
                     <Ionicons
                       name="ellipsis-horizontal"
@@ -179,6 +236,37 @@ const styles = StyleSheet.create({
   },
   section: {
     gap: 12,
+  },
+  backupBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: 'rgba(245, 158, 11, 0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(245, 158, 11, 0.35)',
+    borderRadius: GymTheme.borderRadius.lg,
+    padding: 12,
+  },
+  backupBannerTitle: {
+    color: GymTheme.colors.textPrimary,
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  backupBannerSub: {
+    color: GymTheme.colors.textSecondary,
+    fontSize: 12,
+    marginTop: 2,
+  },
+  backupBannerBtn: {
+    backgroundColor: GymTheme.colors.accent,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: GymTheme.borderRadius.full,
+  },
+  backupBannerBtnText: {
+    color: '#1c1917',
+    fontSize: 12,
+    fontWeight: '800',
   },
   sectionHeader: {
     flexDirection: 'row',

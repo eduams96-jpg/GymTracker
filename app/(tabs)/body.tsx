@@ -41,7 +41,36 @@ export default function BodyTrackingScreen() {
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [editingMetricId, setEditingMetricId] = useState<string | null>(null);
 
+  const formatDatePT = (ts: number) => {
+    const d = new Date(ts);
+    const day = String(d.getDate()).padStart(2, '0');
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const year = d.getFullYear();
+    return `${day}/${month}/${year}`;
+  };
+
+  const parseDatePT = (str: string): number => {
+    const parts = str.trim().split(/[/\-.]/);
+    if (parts.length === 3) {
+      if (parts[0].length === 4) {
+        const y = parseInt(parts[0], 10);
+        const m = parseInt(parts[1], 10) - 1;
+        const d = parseInt(parts[2], 10);
+        const dt = new Date(y, m, d, 12, 0, 0);
+        if (!isNaN(dt.getTime())) return dt.getTime();
+      } else {
+        const d = parseInt(parts[0], 10);
+        const m = parseInt(parts[1], 10) - 1;
+        const y = parseInt(parts[2], 10);
+        const dt = new Date(y, m, d, 12, 0, 0);
+        if (!isNaN(dt.getTime())) return dt.getTime();
+      }
+    }
+    return Date.now();
+  };
+
   // Form state
+  const [evalDate, setEvalDate] = useState(formatDatePT(Date.now()));
   const [weight, setWeight] = useState('');
   const [muscleMass, setMuscleMass] = useState('');
   const [fatPercent, setFatPercent] = useState('');
@@ -135,6 +164,7 @@ export default function BodyTrackingScreen() {
 
   const handleOpenAddModal = () => {
     setEditingMetricId(null);
+    setEvalDate(formatDatePT(Date.now()));
     setWeight('');
     setMuscleMass('');
     setFatPercent('');
@@ -157,6 +187,7 @@ export default function BodyTrackingScreen() {
 
   const handleEditEvaluation = (log: BodyMetricLog) => {
     setEditingMetricId(log.id);
+    setEvalDate(formatDatePT(log.timestamp));
     setWeight(String(log.weightKg));
     setMuscleMass(log.skeletalMuscleMassKg ? String(log.skeletalMuscleMassKg) : '');
     setFatPercent(log.bodyFatPercentage ? String(log.bodyFatPercentage) : '');
@@ -204,12 +235,19 @@ export default function BodyTrackingScreen() {
       notes: notes.trim() || undefined,
     };
 
+    const targetTimestamp = parseDatePT(evalDate);
+    const dateIso = new Date(targetTimestamp).toISOString();
+
     if (editingMetricId) {
-      await updateBodyMetric(editingMetricId, payload);
+      await updateBodyMetric(editingMetricId, {
+        ...payload,
+        timestamp: targetTimestamp,
+        date: dateIso,
+      });
     } else {
       await addBodyMetric({
-        date: new Date().toISOString(),
-        timestamp: Date.now(),
+        date: dateIso,
+        timestamp: targetTimestamp,
         ...payload,
       });
     }
@@ -765,6 +803,43 @@ export default function BodyTrackingScreen() {
             style={styles.modalScroll}
             contentContainerStyle={styles.modalScrollContent}
             keyboardShouldPersistTaps="handled">
+            {/* Date Selection */}
+            <View style={styles.dateSectionBox}>
+              <Text style={styles.inputLabel}>Data da Avaliação (DD/MM/AAAA)</Text>
+              <View style={styles.dateInputRow}>
+                <TextInput
+                  style={[styles.modalInput, { flex: 1 }]}
+                  placeholder="DD/MM/AAAA"
+                  placeholderTextColor={GymTheme.colors.textMuted}
+                  value={evalDate}
+                  onChangeText={setEvalDate}
+                />
+                <TouchableOpacity
+                  style={styles.quickDateChip}
+                  onPress={() => setEvalDate(formatDatePT(Date.now()))}>
+                  <Text style={styles.quickDateChipText}>Hoje</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.quickDateChip}
+                  onPress={() => {
+                    const d = new Date();
+                    d.setDate(d.getDate() - 7);
+                    setEvalDate(formatDatePT(d.getTime()));
+                  }}>
+                  <Text style={styles.quickDateChipText}>-7d</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.quickDateChip}
+                  onPress={() => {
+                    const d = new Date();
+                    d.setMonth(d.getMonth() - 1);
+                    setEvalDate(formatDatePT(d.getTime()));
+                  }}>
+                  <Text style={styles.quickDateChipText}>-1m</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
             {/* Section 1: InBody Metrics */}
             <Text style={styles.formSectionHeading}>1. Composição Corporal (InBody)</Text>
 
@@ -1414,6 +1489,33 @@ const styles = StyleSheet.create({
   modalScrollContent: {
     padding: 16,
     paddingBottom: 40,
+  },
+  dateSectionBox: {
+    backgroundColor: GymTheme.colors.card,
+    borderRadius: GymTheme.borderRadius.lg,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: GymTheme.colors.cardBorder,
+    marginBottom: 16,
+    gap: 8,
+  },
+  dateInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  quickDateChip: {
+    backgroundColor: GymTheme.colors.surface,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    borderRadius: GymTheme.borderRadius.md,
+    borderWidth: 1,
+    borderColor: GymTheme.colors.border,
+  },
+  quickDateChipText: {
+    color: GymTheme.colors.textSecondary,
+    fontSize: 12,
+    fontWeight: '700',
   },
   formSectionHeading: {
     color: GymTheme.colors.primary,

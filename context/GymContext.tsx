@@ -10,6 +10,7 @@ import {
   PersonalRecord,
   BodyMetricLog,
   ProgressPhoto,
+  PRAlert,
 } from '../types/gym';
 import { StorageService } from '../services/storage';
 import { audioAlertService } from '../services/audioAlert';
@@ -47,6 +48,7 @@ interface GymContextType {
 
   // Templates
   saveNewTemplate: (template: Omit<WorkoutTemplate, 'id'>) => Promise<WorkoutTemplate>;
+  updateTemplate: (id: string, updates: Partial<Omit<WorkoutTemplate, 'id'>>) => Promise<void>;
   deleteTemplate: (id: string) => Promise<void>;
 
   // Exercises
@@ -74,6 +76,11 @@ interface GymContextType {
   resetAllData: () => Promise<void>;
   exportBackup: () => Promise<boolean>;
   restoreBackup: (jsonString: string) => Promise<boolean>;
+  lastBackupAt: number | null;
+
+  // Live PR alert during workout
+  prAlert: PRAlert | null;
+  dismissPRAlert: () => void;
 
   // Rest Timer
   startRestTimer: (seconds: number) => void;
@@ -92,6 +99,10 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [activeSession, setActiveSession] = useState<WorkoutSession | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isAudioMuted, setIsAudioMuted] = useState(false);
+  const [lastBackupAt, setLastBackupAt] = useState<number | null>(null);
+  const [prAlert, setPrAlert] = useState<PRAlert | null>(null);
+  // Highest weight already celebrated per exercise in the current session (avoids repeated alerts)
+  const sessionPRRef = useRef<Record<string, number>>({});
 
   // Rest Timer State
   const [restTimer, setRestTimer] = useState<RestTimerState>({
@@ -115,6 +126,7 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           loadedBodyMetrics,
           loadedActive,
           loadedPhotos,
+          loadedLastBackup,
         ] = await Promise.all([
           StorageService.getExercises(),
           StorageService.getTemplates(),
@@ -122,8 +134,10 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           StorageService.getBodyMetrics(),
           StorageService.getActiveSession(),
           StorageService.getProgressPhotos(),
+          StorageService.getLastBackupAt(),
         ]);
 
+        setLastBackupAt(loadedLastBackup);
         setExercises(loadedExercises);
         setTemplates(loadedTemplates);
         setSessions(loadedSessions);
@@ -250,10 +264,15 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             // Get template config if defined
             const cfg = template.exerciseConfigs?.find((c) => c.exerciseId === exId);
 
-            // Get last session set values for helpful placeholder
+            // Last session values drive the progressive overload suggestion
             const lastSessionExercise = StorageService.getLastSessionExercise(sessions, exId);
-            const defaultWeight = cfg?.targetWeightKg ?? (lastSessionExercise?.sets?.[0]?.weightKg || 20);
-            const defaultReps = cfg?.targetReps ?? (lastSessionExercise?.sets?.[0]?.reps || 10);
+            const suggestion = StorageService.getProgressionSuggestion(
+              lastSessionExercise,
+              cfg?.targetReps,
+              exInfo.equipment
+            );
+            const defaultWeight = suggestion?.weightKg ?? cfg?.targetWeightKg ?? 20;
+            const defaultReps = suggestion?.reps ?? cfg?.targetReps ?? 10;
             const targetSetsCount = cfg?.targetSets || 3;
             const restSeconds = cfg?.restSeconds || exInfo.defaultRestSeconds || 90;
 
@@ -276,12 +295,16 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               muscleGroup: exInfo.muscleGroup,
               equipment: exInfo.equipment,
               restSeconds,
+              targetReps: defaultReps,
+              progressionHint: suggestion?.hint,
               sets,
             };
           })
           .filter(Boolean) as WorkoutExercise[];
       }
 
+      sessionPRRef.current = {};
+      setPrAlert(null);
       const newSession: WorkoutSession = {
         id: `session-${startTime}`,
         title: template ? template.title : 'Treino Livre',
@@ -325,22 +348,19 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const filteredExercises = activeSession.exercises
       .map((ex) => {
         const completedSets = ex.sets.filter((s) => s.completed);
+        let sessionMax = 0;
         for (const s of completedSets) {
           totalVolume += s.weightKg * s.reps;
           completedSetsCount += 1;
-
-          const pr = currentPRs[ex.exerciseId];
-          if (!pr || s.weightKg > pr.maxWeightKg) {
-            newPRs += 1;
-            currentPRs[ex.exerciseId] = {
-              exerciseId: ex.exerciseId,
-              exerciseName: ex.exerciseName,
-              maxWeightKg: s.weightKg,
-              bestReps: s.reps,
-              bestDate: new Date().toISOString(),
-              estimated1RM: s.weightKg * (36 / (37 - Math.min(s.reps, 30))),
-            };
+          if (s.type !== 'warmup' && s.reps > 0) {
+            sessionMax = Math.max(sessionMax, s.weightKg);
           }
+        }
+        // A PR only counts when an existing record for this exercise is beaten
+        // (first-time exercises establish a baseline, not a record)
+        const prevPR = currentPRs[ex.exerciseId];
+        if (prevPR && sessionMax > prevPR.maxWeightKg) {
+          newPRs += 1;
         }
         return {
           ...ex,
@@ -377,6 +397,8 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     setActiveSession(null);
     dismissRestTimer();
+    setPrAlert(null);
+    sessionPRRef.current = {};
     await StorageService.saveActiveSession(null);
 
     if (Platform.OS !== 'web') {
@@ -391,8 +413,13 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (!activeSession) return;
 
       const lastExercise = StorageService.getLastSessionExercise(sessions, exercise.id);
-      const defaultWeight = lastExercise?.sets?.[0]?.weightKg || 20;
-      const defaultReps = lastExercise?.sets?.[0]?.reps || 10;
+      const suggestion = StorageService.getProgressionSuggestion(
+        lastExercise,
+        undefined,
+        exercise.equipment
+      );
+      const defaultWeight = suggestion?.weightKg ?? 20;
+      const defaultReps = suggestion?.reps ?? 10;
 
       const newExercise: WorkoutExercise = {
         id: `we-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
@@ -401,6 +428,8 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         muscleGroup: exercise.muscleGroup,
         equipment: exercise.equipment,
         restSeconds: exercise.defaultRestSeconds || 90,
+        targetReps: defaultReps,
+        progressionHint: suggestion?.hint,
         sets: [
           {
             id: `s-${Date.now()}-1`,
@@ -500,41 +529,71 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     []
   );
 
+  /**
+   * Checks whether a just-completed set beats the saved personal record and,
+   * if so, raises a live PR alert (once per new max within the session).
+   */
+  const checkLivePR = useCallback(
+    (exerciseId: string, exerciseName: string, set: WorkoutSet) => {
+      if (set.type === 'warmup' || set.weightKg <= 0 || set.reps <= 0) return;
+      const saved = personalRecords[exerciseId];
+      if (!saved) return; // first time doing this exercise: baseline, not a PR
+      const alreadyCelebrated = sessionPRRef.current[exerciseId] ?? 0;
+      const threshold = Math.max(saved.maxWeightKg, alreadyCelebrated);
+      if (set.weightKg > threshold) {
+        sessionPRRef.current[exerciseId] = set.weightKg;
+        setPrAlert({
+          exerciseName,
+          weightKg: set.weightKg,
+          reps: set.reps,
+          previousMaxKg: saved.maxWeightKg,
+          at: Date.now(),
+        });
+        if (Platform.OS !== 'web') {
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+        }
+      }
+    },
+    [personalRecords]
+  );
+
+  const dismissPRAlert = useCallback(() => setPrAlert(null), []);
+
   const toggleSetCompleted = useCallback(
     (workoutExerciseId: string, setId: string) => {
+      if (!activeSession) return;
+      const ex = activeSession.exercises.find((e) => e.id === workoutExerciseId);
+      const target = ex?.sets.find((s) => s.id === setId);
+      if (!ex || !target) return;
+      const willBeCompleted = !target.completed;
+
       setActiveSession((prev) => {
         if (!prev) return null;
-        let willBeCompleted = false;
-
-        const updatedExercises = prev.exercises.map((ex) => {
-          if (ex.id !== workoutExerciseId) return ex;
-          return {
-            ...ex,
-            sets: ex.sets.map((s) => {
-              if (s.id === setId) {
-                willBeCompleted = !s.completed;
-                return { ...s, completed: willBeCompleted };
-              }
-              return s;
-            }),
-          };
-        });
-
-        if (willBeCompleted) {
-          if (Platform.OS !== 'web') {
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
-          }
-          // Start a 90 second rest timer automatically when completing a set
-          startRestTimer(90);
-        }
-
         return {
           ...prev,
-          exercises: updatedExercises,
+          exercises: prev.exercises.map((e) =>
+            e.id !== workoutExerciseId
+              ? e
+              : {
+                  ...e,
+                  sets: e.sets.map((s) =>
+                    s.id === setId ? { ...s, completed: willBeCompleted } : s
+                  ),
+                }
+          ),
         };
       });
+
+      if (willBeCompleted) {
+        if (Platform.OS !== 'web') {
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+        }
+        // Use the rest time configured for this exercise (routine / suggested default)
+        startRestTimer(ex.restSeconds || 90);
+        checkLivePR(ex.exerciseId, ex.exerciseName, target);
+      }
     },
-    [startRestTimer]
+    [activeSession, startRestTimer, checkLivePR]
   );
 
   const updateExerciseNotes = useCallback((workoutExerciseId: string, notes: string) => {
@@ -649,28 +708,23 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const completeCurrentSetAndRest = useCallback(
     (workoutExerciseId: string, setId: string, overrideRestSeconds?: number) => {
-      let finalRest = overrideRestSeconds;
+      if (!activeSession) return;
+      const ex = activeSession.exercises.find((e) => e.id === workoutExerciseId);
+      const currentSet = ex?.sets.find((s) => s.id === setId);
+      if (!ex || !currentSet) return;
+
+      const finalRest = overrideRestSeconds || ex.restSeconds || 90;
+      const lastWeight = currentSet.weightKg;
+      const lastReps = currentSet.reps;
 
       setActiveSession((prev) => {
         if (!prev) return null;
-        let lastWeight = 0;
-        let lastReps = 0;
+        const updatedExercises = prev.exercises.map((e) => {
+          if (e.id !== workoutExerciseId) return e;
+          const currentIdx = e.sets.findIndex((s) => s.id === setId);
+          if (currentIdx === -1) return e;
 
-        const updatedExercises = prev.exercises.map((ex) => {
-          if (ex.id !== workoutExerciseId) return ex;
-
-          if (!finalRest) {
-            finalRest = ex.restSeconds || 90;
-          }
-
-          const currentIdx = ex.sets.findIndex((s) => s.id === setId);
-          if (currentIdx === -1) return ex;
-
-          const currentSet = ex.sets[currentIdx];
-          lastWeight = currentSet.weightKg;
-          lastReps = currentSet.reps;
-
-          const updatedSets = ex.sets.map((s, idx) => {
+          const updatedSets = e.sets.map((s, idx) => {
             if (s.id === setId) {
               return { ...s, completed: true };
             }
@@ -685,16 +739,17 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             return s;
           });
 
-          return { ...ex, sets: updatedSets };
+          return { ...e, sets: updatedSets };
         });
 
         return { ...prev, exercises: updatedExercises };
       });
 
       // Start the rest timer countdown
-      startRestTimer(finalRest || 90);
+      startRestTimer(finalRest);
+      checkLivePR(ex.exerciseId, ex.exerciseName, currentSet);
     },
-    [startRestTimer]
+    [activeSession, startRestTimer, checkLivePR]
   );
 
   const resetAllData = useCallback(async () => {
@@ -709,13 +764,19 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [dismissRestTimer]);
 
   const exportBackup = useCallback(async (): Promise<boolean> => {
-    return await StorageService.shareBackupFile(
+    const ok = await StorageService.shareBackupFile(
       exercises,
       templates,
       sessions,
       bodyMetrics,
       progressPhotos
     );
+    if (ok) {
+      const now = Date.now();
+      setLastBackupAt(now);
+      await StorageService.setLastBackupAt(now);
+    }
+    return ok;
   }, [exercises, templates, sessions, bodyMetrics, progressPhotos]);
 
   const restoreBackup = useCallback(async (jsonString: string): Promise<boolean> => {
@@ -741,6 +802,15 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setTemplates(updated);
       await StorageService.saveTemplates(updated);
       return newTemplate;
+    },
+    [templates]
+  );
+
+  const updateTemplate = useCallback(
+    async (id: string, updates: Partial<Omit<WorkoutTemplate, 'id'>>): Promise<void> => {
+      const updated = templates.map((t) => (t.id === id ? { ...t, ...updates } : t));
+      setTemplates(updated);
+      await StorageService.saveTemplates(updated);
     },
     [templates]
   );
@@ -793,6 +863,7 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         updateSet,
         toggleSetCompleted,
         saveNewTemplate,
+        updateTemplate,
         deleteTemplate,
         addCustomExercise,
         deleteExercise,
@@ -808,6 +879,9 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         resetAllData,
         exportBackup,
         restoreBackup,
+        lastBackupAt,
+        prAlert,
+        dismissPRAlert,
         startRestTimer,
         adjustRestTimer,
         dismissRestTimer,

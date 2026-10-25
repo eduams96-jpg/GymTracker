@@ -31,6 +31,9 @@ export default function ActiveWorkoutScreen() {
   const router = useRouter();
   const {
     activeSession,
+    bodyMetrics,
+    prAlert,
+    dismissPRAlert,
     cancelWorkout,
     finishWorkout,
     addExerciseToActiveWorkout,
@@ -68,10 +71,13 @@ export default function ActiveWorkoutScreen() {
     return () => clearInterval(interval);
   }, [activeSession]);
 
+  const latestWeightKg = bodyMetrics && bodyMetrics.length > 0 ? bodyMetrics[0].weightKg : 80;
+
   const autoCalories = useMemo(() => {
-    // Estimativa padrão de ginásio: ~7.5 kcal por minuto de treino com pesos
-    return Math.max(1, Math.round((elapsedSeconds / 60) * 7.5));
-  }, [elapsedSeconds]);
+    // Estimativa metabólica realista (MET 6.0 para treino com pesos), indexada ao peso do InBody:
+    const kcalPerMin = (6.0 * 3.5 * latestWeightKg) / 200;
+    return Math.max(1, Math.round((elapsedSeconds / 60) * kcalPerMin));
+  }, [elapsedSeconds, latestWeightKg]);
 
   const currentCalories = customCalories !== '' ? parseInt(customCalories, 10) || 0 : autoCalories;
 
@@ -291,6 +297,16 @@ export default function ActiveWorkoutScreen() {
                 </View>
               )}
 
+              {/* Progressive Overload Suggestion */}
+              {exercise.progressionHint ? (
+                <View style={styles.progressionBanner}>
+                  <Ionicons name="trending-up" size={13} color={GymTheme.colors.primary} />
+                  <Text style={styles.progressionBannerText}>
+                    Progresso sugerido: {exercise.progressionHint}
+                  </Text>
+                </View>
+              ) : null}
+
               {/* Exercise Card Header */}
               <View style={styles.exerciseCardHeader}>
                 <View style={{ flex: 1 }}>
@@ -498,6 +514,43 @@ export default function ActiveWorkoutScreen() {
                 <Text style={styles.noteSaveText}>Guardar Nota</Text>
               </TouchableOpacity>
             </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Live Personal Record (PR) Celebration Alert */}
+      <Modal
+        visible={!!prAlert}
+        transparent
+        animationType="slide"
+        onRequestClose={dismissPRAlert}>
+        <View style={styles.prModalOverlay}>
+          <View style={styles.prModalCard}>
+            <View style={styles.prTrophyCircle}>
+              <Ionicons name="trophy" size={40} color="#F59E0B" />
+            </View>
+            <Text style={styles.prModalTitle}>NOVO RECORDE PESSOAL! 🏆</Text>
+            <Text style={styles.prModalExercise}>{prAlert?.exerciseName}</Text>
+
+            <View style={styles.prModalStatsRow}>
+              <View style={styles.prStatBox}>
+                <Text style={styles.prStatLabel}>ANTERIOR</Text>
+                <Text style={styles.prStatOldVal}>{prAlert?.previousMaxKg} kg</Text>
+              </View>
+              <Ionicons name="arrow-forward" size={20} color={GymTheme.colors.primary} />
+              <View style={styles.prStatBox}>
+                <Text style={styles.prStatLabel}>NOVO PR</Text>
+                <Text style={styles.prStatNewVal}>{prAlert?.weightKg} kg</Text>
+              </View>
+            </View>
+
+            <Text style={styles.prModalSub}>
+              Superaste a tua carga máxima com {prAlert?.reps} repetições! Continua a dar tudo! 🔥
+            </Text>
+
+            <TouchableOpacity style={styles.prCelebrateBtn} onPress={dismissPRAlert}>
+              <Text style={styles.prCelebrateBtnText}>Vamos a isso! 💪</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </Modal>
@@ -766,6 +819,23 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '800',
     letterSpacing: 0.5,
+  },
+  progressionBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(16, 185, 129, 0.12)',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: GymTheme.borderRadius.sm,
+    borderWidth: 1,
+    borderColor: 'rgba(16, 185, 129, 0.25)',
+  },
+  progressionBannerText: {
+    color: GymTheme.colors.primary,
+    fontSize: 11,
+    fontWeight: '700',
+    flex: 1,
   },
   exerciseCardHeader: {
     flexDirection: 'row',
@@ -1081,5 +1151,99 @@ const styles = StyleSheet.create({
     color: '#022c22',
     fontSize: 15,
     fontWeight: '900',
+  },
+  prModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.8)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  prModalCard: {
+    backgroundColor: GymTheme.colors.cardElevated,
+    borderRadius: GymTheme.borderRadius.xl,
+    padding: 24,
+    width: '100%',
+    maxWidth: 360,
+    alignItems: 'center',
+    borderWidth: 1.5,
+    borderColor: '#F59E0B',
+    gap: 12,
+  },
+  prTrophyCircle: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: 'rgba(245, 158, 11, 0.2)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 4,
+  },
+  prModalTitle: {
+    color: '#F59E0B',
+    fontSize: 18,
+    fontWeight: '900',
+    textAlign: 'center',
+    letterSpacing: 0.5,
+  },
+  prModalExercise: {
+    color: GymTheme.colors.textPrimary,
+    fontSize: 16,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+  prModalStatsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-around',
+    width: '100%',
+    backgroundColor: GymTheme.colors.surface,
+    padding: 12,
+    borderRadius: GymTheme.borderRadius.lg,
+    borderWidth: 1,
+    borderColor: GymTheme.colors.border,
+    marginVertical: 4,
+  },
+  prStatBox: {
+    alignItems: 'center',
+  },
+  prStatLabel: {
+    color: GymTheme.colors.textMuted,
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+  },
+  prStatOldVal: {
+    color: GymTheme.colors.textSecondary,
+    fontSize: 18,
+    fontWeight: '700',
+    marginTop: 2,
+    textDecorationLine: 'line-through',
+  },
+  prStatNewVal: {
+    color: GymTheme.colors.primary,
+    fontSize: 22,
+    fontWeight: '900',
+    marginTop: 2,
+  },
+  prModalSub: {
+    color: GymTheme.colors.textSecondary,
+    fontSize: 13,
+    textAlign: 'center',
+    lineHeight: 18,
+  },
+  prCelebrateBtn: {
+    backgroundColor: GymTheme.colors.primary,
+    paddingVertical: 14,
+    paddingHorizontal: 24,
+    borderRadius: GymTheme.borderRadius.lg,
+    width: '100%',
+    alignItems: 'center',
+    marginTop: 6,
+  },
+  prCelebrateBtnText: {
+    color: '#052e16',
+    fontSize: 15,
+    fontWeight: '800',
   },
 });

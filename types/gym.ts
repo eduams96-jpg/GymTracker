@@ -47,6 +47,8 @@ export interface WorkoutExercise {
   notes?: string;
   supersetGroupId?: string; // Grouping ID for supersets (ex: "ss-1")
   restSeconds?: number;
+  targetReps?: number; // Objetivo de repetições (da rotina ou da última sessão)
+  progressionHint?: string; // Sugestão de carga progressiva (ex: "+2.5 kg vs última vez")
   sets: WorkoutSet[];
 }
 
@@ -117,6 +119,14 @@ export interface PersonalRecord {
   bestReps: number;
   bestDate: string; // ISO string
   estimated1RM: number; // Brzycki formula: weight / (1.0278 - (0.0278 * reps))
+}
+
+export interface PRAlert {
+  exerciseName: string;
+  weightKg: number;
+  reps: number;
+  previousMaxKg: number;
+  at: number; // timestamp
 }
 
 export type PhotoPose = 'frente' | 'costas' | 'perfil_esquerdo' | 'perfil_direito' | 'outro';

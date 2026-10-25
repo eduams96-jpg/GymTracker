@@ -5,6 +5,8 @@ import {
   Exercise,
   WorkoutTemplate,
   WorkoutSession,
+  WorkoutExercise,
+  EquipmentType,
   PersonalRecord,
   BodyMetricLog,
   ProgressPhoto,
@@ -24,6 +26,7 @@ const KEYS = {
   REST_TIMER: '@gym_tracker_rest_timer_v1',
   BODY_METRICS: '@gym_tracker_body_metrics_v1',
   PROGRESS_PHOTOS: '@gym_tracker_progress_photos_v1',
+  LAST_BACKUP_AT: '@gym_tracker_last_backup_at_v1',
 };
 
 export interface ExerciseHistoryPoint {
@@ -307,13 +310,100 @@ export const StorageService = {
   },
 
   getLastSessionExercise(sessions: WorkoutSession[], exerciseId: string) {
-    for (const session of [...sessions].reverse()) {
+    // Sessions are stored newest-first, but sort explicitly so the most recent
+    // session with completed sets for this exercise is always returned.
+    const newestFirst = [...sessions].sort((a, b) => b.startTime - a.startTime);
+    for (const session of newestFirst) {
       const match = session.exercises.find((e) => e.exerciseId === exerciseId);
       if (match && match.sets.some((s) => s.completed)) {
         return match;
       }
     }
     return null;
+  },
+
+  /**
+   * Progressive overload suggestion based on the last session of an exercise.
+   * Rule: if every completed working set reached the target reps, suggest a
+   * small load increase; otherwise keep the same load.
+   */
+  getProgressionSuggestion(
+    lastExercise: WorkoutExercise | null,
+    targetReps: number | undefined,
+    equipment: EquipmentType
+  ): { weightKg: number; reps: number; hint?: string } | null {
+    if (!lastExercise) return null;
+    const workingSets = lastExercise.sets.filter(
+      (s) => s.completed && s.type !== 'warmup' && s.reps > 0
+    );
+    if (workingSets.length === 0) return null;
+
+    const topWeight = Math.max(...workingSets.map((s) => s.weightKg));
+    const goalReps = targetReps ?? workingSets[0].reps;
+    const hitAllReps = workingSets.every((s) => s.reps >= goalReps);
+
+    if (equipment === 'peso_corporal' || topWeight <= 0) {
+      if (hitAllReps) {
+        return { weightKg: topWeight, reps: goalReps + 1, hint: `+1 rep (fizeste ${goalReps} em todas as séries)` };
+      }
+      return { weightKg: topWeight, reps: goalReps, hint: `Repete ${goalReps} reps até completares todas` };
+    }
+
+    if (hitAllReps) {
+      const increment = equipment === 'halteres' ? 2 : 2.5;
+      return {
+        weightKg: topWeight + increment,
+        reps: goalReps,
+        hint: `+${increment} kg — completaste ${goalReps} reps a ${topWeight} kg na última vez`,
+      };
+    }
+    return {
+      weightKg: topWeight,
+      reps: goalReps,
+      hint: `Mantém ${topWeight} kg até fazeres ${goalReps} reps em todas as séries`,
+    };
+  },
+
+  async getLastBackupAt(): Promise<number | null> {
+    try {
+      const v = await AsyncStorage.getItem(KEYS.LAST_BACKUP_AT);
+      return v ? Number(v) : null;
+    } catch {
+      return null;
+    }
+  },
+
+  async setLastBackupAt(ts: number): Promise<void> {
+    try {
+      await AsyncStorage.setItem(KEYS.LAST_BACKUP_AT, String(ts));
+    } catch (e) {
+      console.error('Error saving last backup timestamp:', e);
+    }
+  },
+
+  /** Parses a backup without writing anything, to show a confirmation summary. */
+  previewBackup(jsonString: string): {
+    exportedAt?: string;
+    sessions: number;
+    templates: number;
+    exercises: number;
+    bodyMetrics: number;
+    progressPhotos: number;
+  } | null {
+    try {
+      const data = JSON.parse(jsonString);
+      if (!data.exercises || !data.templates || !data.sessions) return null;
+      return {
+        exportedAt: data.exportedAt,
+        sessions: data.sessions.length,
+        templates: data.templates.length,
+        exercises: data.exercises.length,
+        bodyMetrics: (data.bodyMetrics || []).length,
+        progressPhotos: (data.progressPhotos || []).length,
+      };
+    } catch {
+      return null;
+    }
   },
 
   getExerciseHistory(sessions: WorkoutSession[], exerciseId: string): ExerciseHistoryPoint[] {

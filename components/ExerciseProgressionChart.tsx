@@ -1,18 +1,22 @@
-import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import React, { useState } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import Svg, { Path, Circle, Line, Text as SvgText, Defs, LinearGradient, Stop } from 'react-native-svg';
 import { ExerciseHistoryPoint } from '../services/storage';
 import GymTheme from '../constants/theme';
 
+export type ExerciseChartMetric = 'maxWeightKg' | 'estimated1RM' | 'totalVolume';
+
 interface ExerciseProgressionChartProps {
   history: ExerciseHistoryPoint[];
-  metric?: 'maxWeightKg' | 'estimated1RM';
+  metric?: ExerciseChartMetric;
 }
 
 export const ExerciseProgressionChart: React.FC<ExerciseProgressionChartProps> = ({
   history,
-  metric = 'maxWeightKg',
+  metric: initialMetric = 'maxWeightKg',
 }) => {
+  const [selectedMetric, setSelectedMetric] = useState<ExerciseChartMetric>(initialMetric);
+
   if (history.length === 0) {
     return (
       <View style={styles.emptyContainer}>
@@ -21,7 +25,7 @@ export const ExerciseProgressionChart: React.FC<ExerciseProgressionChartProps> =
     );
   }
 
-  const values = history.map((h) => h[metric]);
+  const values = history.map((h) => h[selectedMetric]);
   const minVal = Math.min(...values);
   const maxVal = Math.max(...values);
   const range = Math.max(maxVal - minVal, 5);
@@ -67,11 +71,57 @@ export const ExerciseProgressionChart: React.FC<ExerciseProgressionChartProps> =
   const diff = lastVal - firstVal;
   const percentChange = firstVal > 0 ? Math.round((diff / firstVal) * 100) : 0;
 
+  const chartTitle =
+    selectedMetric === 'totalVolume'
+      ? 'Volume Total'
+      : selectedMetric === 'estimated1RM'
+      ? '1RM Estimado'
+      : 'Carga Máxima';
+
   return (
     <View style={styles.card}>
+      {/* Metric Selector Tabs */}
+      <View style={styles.metricTabsRow}>
+        <TouchableOpacity
+          style={[styles.metricTab, selectedMetric === 'maxWeightKg' && styles.metricTabActive]}
+          onPress={() => setSelectedMetric('maxWeightKg')}>
+          <Text
+            style={[
+              styles.metricTabText,
+              selectedMetric === 'maxWeightKg' && styles.metricTabTextActive,
+            ]}>
+            Carga Máx
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.metricTab, selectedMetric === 'estimated1RM' && styles.metricTabActive]}
+          onPress={() => setSelectedMetric('estimated1RM')}>
+          <Text
+            style={[
+              styles.metricTabText,
+              selectedMetric === 'estimated1RM' && styles.metricTabTextActive,
+            ]}>
+            1RM Est.
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.metricTab, selectedMetric === 'totalVolume' && styles.metricTabActive]}
+          onPress={() => setSelectedMetric('totalVolume')}>
+          <Text
+            style={[
+              styles.metricTabText,
+              selectedMetric === 'totalVolume' && styles.metricTabTextActive,
+            ]}>
+            Volume
+          </Text>
+        </TouchableOpacity>
+      </View>
+
       <View style={styles.headerRow}>
         <View>
-          <Text style={styles.title}>Evolução de Carga Máxima</Text>
+          <Text style={styles.title}>Evolução de {chartTitle}</Text>
           <Text style={styles.currentVal}>{lastVal} kg</Text>
         </View>
 
@@ -178,7 +228,32 @@ const styles = StyleSheet.create({
     padding: 14,
     borderWidth: 1,
     borderColor: GymTheme.colors.cardBorder,
-    gap: 8,
+    gap: 12,
+  },
+  metricTabsRow: {
+    flexDirection: 'row',
+    backgroundColor: GymTheme.colors.surface,
+    borderRadius: GymTheme.borderRadius.md,
+    padding: 3,
+    borderWidth: 1,
+    borderColor: GymTheme.colors.border,
+  },
+  metricTab: {
+    flex: 1,
+    paddingVertical: 6,
+    alignItems: 'center',
+    borderRadius: 6,
+  },
+  metricTabActive: {
+    backgroundColor: GymTheme.colors.card,
+  },
+  metricTabText: {
+    color: GymTheme.colors.textMuted,
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  metricTabTextActive: {
+    color: GymTheme.colors.primary,
   },
   headerRow: {
     flexDirection: 'row',

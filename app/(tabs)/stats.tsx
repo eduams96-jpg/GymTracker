@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   View,
   Text,
@@ -34,6 +34,63 @@ export default function StatsScreen() {
   const now = Date.now();
   const sevenDaysAgo = now - 7 * 86400000;
   const workoutsThisWeek = sessions.filter((s) => s.startTime >= sevenDaysAgo).length;
+
+  // Streak & last 14 days calendar
+  const workoutDaysSet = useMemo(() => {
+    const set = new Set<string>();
+    for (const s of sessions) {
+      const d = new Date(s.startTime);
+      set.add(
+        `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+      );
+    }
+    return set;
+  }, [sessions]);
+
+  const last14Days = useMemo(() => {
+    const days = [];
+    for (let i = 13; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      const dayLabel = d.toLocaleDateString('pt-PT', { weekday: 'narrow' }).toUpperCase();
+      const dateNum = d.getDate();
+      days.push({
+        key,
+        dayLabel,
+        dateNum,
+        isToday: i === 0,
+        hasWorkout: workoutDaysSet.has(key),
+      });
+    }
+    return days;
+  }, [workoutDaysSet]);
+
+  // Volume Semanal por Grupo Muscular
+  const weeklyMuscleSets = useMemo(() => {
+    const cutoff = Date.now() - 7 * 86400000;
+    const recent = sessions.filter((s) => s.startTime >= cutoff);
+    const counts: Record<string, number> = {
+      peito: 0,
+      costas: 0,
+      pernas: 0,
+      ombros: 0,
+      biceps: 0,
+      triceps: 0,
+      abdominais: 0,
+    };
+
+    for (const s of recent) {
+      for (const ex of s.exercises) {
+        const completed = ex.sets.filter((st) => st.completed).length;
+        if (counts[ex.muscleGroup] !== undefined) {
+          counts[ex.muscleGroup] += completed;
+        }
+      }
+    }
+
+    return Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  }, [sessions]);
 
   const prList = Object.values(personalRecords).sort((a, b) => b.maxWeightKg - a.maxWeightKg);
   const topExercisePR = prList[0];
@@ -72,23 +129,47 @@ export default function StatsScreen() {
   };
 
   const handleRestore = async () => {
-    if (!restoreJsonInput.trim()) {
+    const raw = restoreJsonInput.trim();
+    if (!raw) {
       Alert.alert('Aviso', 'Cola o conteúdo do ficheiro de backup JSON.');
       return;
     }
 
-    try {
-      const ok = await restoreBackup(restoreJsonInput.trim());
-      if (ok) {
-        Alert.alert('Sucesso', 'Cópia de segurança restaurada com sucesso!');
-        setIsRestoreModalOpen(false);
-        setRestoreJsonInput('');
-      } else {
-        Alert.alert('Erro', 'O ficheiro JSON não tem um formato de backup válido.');
-      }
-    } catch {
-      Alert.alert('Erro', 'Formato JSON inválido.');
+    const preview = StorageService.previewBackup(raw);
+    if (!preview) {
+      Alert.alert('Erro', 'O ficheiro JSON não tem um formato de backup válido.');
+      return;
     }
+
+    const exportDateStr = preview.exportedAt
+      ? new Date(preview.exportedAt).toLocaleDateString('pt-PT')
+      : 'Desconhecida';
+
+    Alert.alert(
+      'Restaurar Cópia de Segurança',
+      `Esta cópia contém:\n• ${preview.sessions} treinos\n• ${preview.templates} rotinas\n• ${preview.exercises} exercícios\n• ${preview.bodyMetrics} avaliações corporais\n• ${preview.progressPhotos} fotos\nExportada a: ${exportDateStr}\n\n⚠️ Atenção: Todos os dados atuais serão substituídos por esta cópia. Desejas avançar?`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Sim, Restaurar',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const ok = await restoreBackup(raw);
+              if (ok) {
+                Alert.alert('Sucesso', 'Cópia de segurança restaurada com sucesso!');
+                setIsRestoreModalOpen(false);
+                setRestoreJsonInput('');
+              } else {
+                Alert.alert('Erro', 'Não foi possível restaurar os dados.');
+              }
+            } catch {
+              Alert.alert('Erro', 'Formato JSON inválido.');
+            }
+          },
+        },
+      ]
+    );
   };
 
   return (
@@ -136,6 +217,83 @@ export default function StatsScreen() {
           </View>
           <Text style={styles.statNumber}>{workoutsThisWeek}</Text>
           <Text style={styles.statTitle}>Esta Semana</Text>
+        </View>
+      </View>
+
+      {/* Streak / Frequency: Last 14 Days */}
+      <View style={styles.section}>
+        <View style={styles.sectionHeader}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <Ionicons name="flame" size={20} color={GymTheme.colors.accent} />
+            <Text style={styles.sectionTitle}>Atividade Recente (14 Dias)</Text>
+          </View>
+          <Text style={styles.prCount}>{workoutDaysSet.size} dias treinados</Text>
+        </View>
+
+        <View style={styles.calendarCard}>
+          <View style={styles.daysRow}>
+            {last14Days.map((day) => (
+              <View key={day.key} style={styles.dayCol}>
+                <Text style={styles.dayLabelText}>{day.dayLabel}</Text>
+                <View
+                  style={[
+                    styles.dayCircle,
+                    day.hasWorkout && styles.dayCircleActive,
+                    day.isToday && styles.dayCircleToday,
+                  ]}>
+                  {day.hasWorkout ? (
+                    <Ionicons name="checkmark" size={12} color="#052e16" />
+                  ) : (
+                    <Text
+                      style={[
+                        styles.dayNumText,
+                        day.isToday && { color: GymTheme.colors.accent },
+                      ]}>
+                      {day.dateNum}
+                    </Text>
+                  )}
+                </View>
+              </View>
+            ))}
+          </View>
+        </View>
+      </View>
+
+      {/* Weekly Muscle Volume */}
+      <View style={styles.section}>
+        <View style={styles.sectionHeader}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <Ionicons name="pie-chart" size={19} color={GymTheme.colors.primary} />
+            <Text style={styles.sectionTitle}>Volume Semanal por Músculo</Text>
+          </View>
+          <Text style={styles.prCount}>Últimos 7 dias</Text>
+        </View>
+
+        <View style={styles.muscleVolumeCard}>
+          {weeklyMuscleSets.length === 0 || weeklyMuscleSets.every(([_, c]) => c === 0) ? (
+            <Text style={styles.emptyMuscleText}>
+              Ainda não registaste treinos nesta semana. Completa séries para ver o balanço muscular!
+            </Text>
+          ) : (
+            weeklyMuscleSets
+              .filter(([_, count]) => count > 0)
+              .map(([muscle, count]) => {
+                const maxCount = Math.max(...weeklyMuscleSets.map(([_, c]) => c), 1);
+                const progressWidth = Math.min(100, Math.round((count / maxCount) * 100));
+
+                return (
+                  <View key={muscle} style={styles.muscleRow}>
+                    <View style={styles.muscleRowHeader}>
+                      <Text style={styles.muscleNameText}>{muscle.toUpperCase()}</Text>
+                      <Text style={styles.muscleSetsText}>{count} séries</Text>
+                    </View>
+                    <View style={styles.muscleBarBg}>
+                      <View style={[styles.muscleBarFill, { width: `${progressWidth}%` }]} />
+                    </View>
+                  </View>
+                );
+              })
+          )}
         </View>
       </View>
 
@@ -356,6 +514,95 @@ const styles = StyleSheet.create({
     color: GymTheme.colors.textPrimary,
     fontSize: 18,
     fontWeight: '800',
+  },
+  calendarCard: {
+    backgroundColor: GymTheme.colors.card,
+    borderRadius: GymTheme.borderRadius.xl,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: GymTheme.colors.cardBorder,
+  },
+  daysRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  dayCol: {
+    alignItems: 'center',
+    gap: 6,
+  },
+  dayLabelText: {
+    color: GymTheme.colors.textMuted,
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  dayCircle: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: GymTheme.colors.surface,
+    borderWidth: 1,
+    borderColor: GymTheme.colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  dayCircleActive: {
+    backgroundColor: GymTheme.colors.primary,
+    borderColor: GymTheme.colors.primary,
+  },
+  dayCircleToday: {
+    borderColor: GymTheme.colors.accent,
+    borderWidth: 1.5,
+  },
+  dayNumText: {
+    color: GymTheme.colors.textMuted,
+    fontSize: 9,
+    fontWeight: '600',
+  },
+  muscleVolumeCard: {
+    backgroundColor: GymTheme.colors.card,
+    borderRadius: GymTheme.borderRadius.xl,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: GymTheme.colors.cardBorder,
+    gap: 12,
+  },
+  emptyMuscleText: {
+    color: GymTheme.colors.textSecondary,
+    fontSize: 13,
+    textAlign: 'center',
+    paddingVertical: 8,
+  },
+  muscleRow: {
+    gap: 5,
+  },
+  muscleRowHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  muscleNameText: {
+    color: GymTheme.colors.textPrimary,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  muscleSetsText: {
+    color: GymTheme.colors.primary,
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  muscleBarBg: {
+    height: 8,
+    backgroundColor: GymTheme.colors.surface,
+    borderRadius: 4,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: GymTheme.colors.border,
+  },
+  muscleBarFill: {
+    height: '100%',
+    backgroundColor: GymTheme.colors.primary,
+    borderRadius: 4,
   },
   prCount: {
     color: GymTheme.colors.textMuted,

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -9,7 +9,7 @@ import {
   SafeAreaView,
   Alert,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams, useNavigation } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useGym } from '../context/GymContext';
@@ -22,17 +22,50 @@ interface RoutineExerciseItem {
   targetSets: number;
   targetReps: number;
   restSeconds: number;
+  targetWeightKg?: number;
 }
 
 export default function NewRoutineScreen() {
   const router = useRouter();
+  const navigation = useNavigation();
   const insets = useSafeAreaInsets();
-  const { saveNewTemplate } = useGym();
+  const { id: editId } = useLocalSearchParams<{ id?: string }>();
+  const { saveNewTemplate, updateTemplate, templates, exercises } = useGym();
+
+  const editingTemplate = editId ? templates.find((t) => t.id === editId) : undefined;
 
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [routineExercises, setRoutineExercises] = useState<RoutineExerciseItem[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [hydrated, setHydrated] = useState(false);
+
+  // Pre-fill the form when editing an existing routine
+  useEffect(() => {
+    if (hydrated || !editingTemplate || exercises.length === 0) return;
+    setTitle(editingTemplate.title);
+    setDescription(editingTemplate.description || '');
+    const items: RoutineExerciseItem[] = editingTemplate.exerciseIds
+      .map((exId) => {
+        const ex = exercises.find((e) => e.id === exId);
+        if (!ex) return null;
+        const cfg = editingTemplate.exerciseConfigs?.find((c) => c.exerciseId === exId);
+        return {
+          exercise: ex,
+          targetSets: cfg?.targetSets ?? 3,
+          targetReps: cfg?.targetReps ?? 10,
+          restSeconds: cfg?.restSeconds ?? ex.defaultRestSeconds ?? 90,
+          targetWeightKg: cfg?.targetWeightKg,
+        };
+      })
+      .filter(Boolean) as RoutineExerciseItem[];
+    setRoutineExercises(items);
+    setHydrated(true);
+  }, [editingTemplate, exercises, hydrated]);
+
+  useEffect(() => {
+    navigation.setOptions({ title: editingTemplate ? 'Editar Rotina' : 'Nova Rotina' });
+  }, [navigation, editingTemplate]);
 
   const getSuggestedRest = (ex: Exercise): number => {
     if (ex.defaultRestSeconds) return ex.defaultRestSeconds;
@@ -58,6 +91,16 @@ export default function NewRoutineScreen() {
 
   const handleRemoveExercise = (id: string) => {
     setRoutineExercises((prev) => prev.filter((e) => e.exercise.id !== id));
+  };
+
+  const moveExercise = (index: number, direction: -1 | 1) => {
+    setRoutineExercises((prev) => {
+      const target = index + direction;
+      if (target < 0 || target >= prev.length) return prev;
+      const next = [...prev];
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
   };
 
   const updateExerciseSets = (exerciseId: string, delta: number) => {
@@ -113,16 +156,22 @@ export default function NewRoutineScreen() {
       targetSets: item.targetSets,
       targetReps: item.targetReps,
       restSeconds: item.restSeconds,
+      targetWeightKg: item.targetWeightKg,
     }));
 
-    await saveNewTemplate({
+    const payload = {
       title: title.trim(),
       description: description.trim() || undefined,
       targetMuscles,
       exerciseIds: routineExercises.map((e) => e.exercise.id),
       exerciseConfigs,
-      isCustom: true,
-    });
+    };
+
+    if (editingTemplate) {
+      await updateTemplate(editingTemplate.id, payload);
+    } else {
+      await saveNewTemplate({ ...payload, isCustom: true });
+    }
 
     router.back();
   };
@@ -206,16 +255,35 @@ export default function NewRoutineScreen() {
                       </View>
                     </View>
 
-                    <TouchableOpacity
-                      onPress={() => handleRemoveExercise(item.exercise.id)}
-                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                      style={styles.trashBtn}>
-                      <Ionicons
-                        name="trash-outline"
-                        size={17}
-                        color={GymTheme.colors.danger}
-                      />
-                    </TouchableOpacity>
+                    <View style={styles.cardHeaderActions}>
+                      <TouchableOpacity
+                        onPress={() => moveExercise(index, -1)}
+                        disabled={index === 0}
+                        hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+                        style={[styles.trashBtn, index === 0 && styles.disabledAction]}>
+                        <Ionicons name="chevron-up" size={18} color={GymTheme.colors.textSecondary} />
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        onPress={() => moveExercise(index, 1)}
+                        disabled={index === routineExercises.length - 1}
+                        hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+                        style={[
+                          styles.trashBtn,
+                          index === routineExercises.length - 1 && styles.disabledAction,
+                        ]}>
+                        <Ionicons name="chevron-down" size={18} color={GymTheme.colors.textSecondary} />
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        onPress={() => handleRemoveExercise(item.exercise.id)}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                        style={styles.trashBtn}>
+                        <Ionicons
+                          name="trash-outline"
+                          size={17}
+                          color={GymTheme.colors.danger}
+                        />
+                      </TouchableOpacity>
+                    </View>
                   </View>
 
                   {/* Steppers: Target Sets & Reps */}
@@ -302,7 +370,9 @@ export default function NewRoutineScreen() {
           ]}
           onPress={handleSave}
           activeOpacity={0.8}>
-          <Text style={styles.saveBtnText}>Guardar Rotina</Text>
+          <Text style={styles.saveBtnText}>
+            {editingTemplate ? 'Guardar Alterações' : 'Guardar Rotina'}
+          </Text>
         </TouchableOpacity>
       </ScrollView>
 
@@ -427,6 +497,14 @@ const styles = StyleSheet.create({
   },
   trashBtn: {
     padding: 4,
+  },
+  cardHeaderActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+  },
+  disabledAction: {
+    opacity: 0.25,
   },
   steppersRow: {
     flexDirection: 'row',
