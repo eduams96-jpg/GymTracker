@@ -14,6 +14,7 @@ import { useGym } from '../../context/GymContext';
 import { StorageService } from '../../services/storage';
 import { ExerciseProgressionChart } from '../../components/ExerciseProgressionChart';
 import { OneRepMaxCalculatorModal } from '../../components/OneRepMaxCalculatorModal';
+import { PlateCalculatorModal } from '../../components/PlateCalculatorModal';
 import GymTheme from '../../constants/theme';
 
 export default function StatsScreen() {
@@ -27,6 +28,7 @@ export default function StatsScreen() {
   } = useGym();
 
   const [is1RMModalOpen, setIs1RMModalOpen] = useState(false);
+  const [isPlateModalOpen, setIsPlateModalOpen] = useState(false);
   const [isRestoreModalOpen, setIsRestoreModalOpen] = useState(false);
   const [restoreJsonInput, setRestoreJsonInput] = useState('');
 
@@ -371,6 +373,22 @@ export default function StatsScreen() {
           </View>
           <Ionicons name="chevron-forward" size={18} color={GymTheme.colors.textMuted} />
         </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.toolCard, { marginTop: 10 }]}
+          onPress={() => setIsPlateModalOpen(true)}
+          activeOpacity={0.8}>
+          <View style={styles.toolLeft}>
+            <View style={[styles.toolIconCircle, { backgroundColor: 'rgba(59, 130, 246, 0.15)' }]}>
+              <Ionicons name="barbell" size={22} color={GymTheme.colors.info} />
+            </View>
+            <View>
+              <Text style={styles.toolTitle}>Calculadora de Discos</Text>
+              <Text style={styles.toolSub}>Distribuição exata de anilhas na barra por cada lado</Text>
+            </View>
+          </View>
+          <Ionicons name="chevron-forward" size={18} color={GymTheme.colors.textMuted} />
+        </TouchableOpacity>
       </View>
 
       {/* Featured Exercise Progression */}
@@ -475,6 +493,12 @@ export default function StatsScreen() {
       <OneRepMaxCalculatorModal
         visible={is1RMModalOpen}
         onClose={() => setIs1RMModalOpen(false)}
+      />
+
+      {/* Plate Calculator Modal */}
+      <PlateCalculatorModal
+        visible={isPlateModalOpen}
+        onClose={() => setIsPlateModalOpen(false)}
       />
 
       {/* Restore Backup Modal */}

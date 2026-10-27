@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
-import { Platform } from 'react-native';
+import { Platform, AppState } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import {
   Exercise,
@@ -34,14 +34,17 @@ interface GymContextType {
 
   // Actions
   startWorkout: (template?: WorkoutTemplate) => void;
+  startWorkoutFromSession: (pastSession: WorkoutSession) => void;
   finishWorkout: (caloriesBurned?: number) => Promise<WorkoutSession | null>;
   cancelWorkout: () => void;
   deleteSession: (sessionId: string) => Promise<void>;
+  updateSession: (updatedSession: WorkoutSession) => Promise<void>;
   addExerciseToActiveWorkout: (exercise: Exercise) => void;
   removeExerciseFromActiveWorkout: (workoutExerciseId: string) => void;
   updateExerciseNotes: (workoutExerciseId: string, notes: string) => void;
   toggleSuperset: (workoutExerciseId: string) => void;
   addSetToExercise: (workoutExerciseId: string) => void;
+  generateWarmupSets: (workoutExerciseId: string) => void;
   removeSet: (workoutExerciseId: string, setId: string) => void;
   updateSet: (workoutExerciseId: string, setId: string, updates: Partial<WorkoutSet>) => void;
   toggleSetCompleted: (workoutExerciseId: string, setId: string) => void;
@@ -204,6 +207,36 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, [restTimer.isActive, restTimer.targetTimestamp]);
 
+  // Handle background/foreground transitions: sync timer immediately on wake-up and alert if finished
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextAppState) => {
+      if (nextAppState === 'active' && restTimer.isActive && restTimer.targetTimestamp) {
+        const now = Date.now();
+        const diff = Math.max(0, Math.ceil((restTimer.targetTimestamp - now) / 1000));
+        if (diff <= 0) {
+          if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+          setRestTimer((prev) => ({
+            ...prev,
+            isActive: false,
+            remainingSeconds: 0,
+            targetTimestamp: null,
+          }));
+          audioAlertService.playCompletionChime();
+          lastAlertSecondRef.current = null;
+        } else {
+          setRestTimer((prev) => ({
+            ...prev,
+            remainingSeconds: diff,
+          }));
+        }
+      }
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, [restTimer.isActive, restTimer.targetTimestamp]);
+
   const startRestTimer = useCallback((seconds: number) => {
     lastAlertSecondRef.current = null;
     const target = Date.now() + seconds * 1000;
@@ -325,6 +358,55 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     },
     [exercises, sessions]
+  );
+
+  const startWorkoutFromSession = useCallback(
+    (pastSession: WorkoutSession) => {
+      const startTime = Date.now();
+      const workoutExercises: WorkoutExercise[] = pastSession.exercises.map((pe) => {
+        const exInfo = exercises.find((e) => e.id === pe.exerciseId);
+        return {
+          id: `we-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+          exerciseId: pe.exerciseId,
+          exerciseName: pe.exerciseName,
+          muscleGroup: pe.muscleGroup,
+          equipment: pe.equipment,
+          restSeconds: pe.restSeconds || exInfo?.defaultRestSeconds || 90,
+          targetReps: pe.targetReps || pe.sets[0]?.reps || 10,
+          notes: pe.notes,
+          sets: pe.sets.map((s, idx) => ({
+            id: `set-${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 7)}`,
+            setNumber: idx + 1,
+            type: s.type,
+            weightKg: s.weightKg,
+            reps: s.reps,
+            completed: false,
+            previousRecord: `${s.weightKg}kg × ${s.reps}`,
+          })),
+        };
+      });
+
+      sessionPRRef.current = {};
+      setPrAlert(null);
+      const newSession: WorkoutSession = {
+        id: `session-${startTime}`,
+        title: pastSession.title,
+        templateId: pastSession.templateId,
+        startTime,
+        durationSeconds: 0,
+        exercises: workoutExercises,
+        totalVolumeKg: 0,
+        completedSetsCount: 0,
+        prCount: 0,
+      };
+
+      setActiveSession(newSession);
+
+      if (Platform.OS !== 'web') {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+      }
+    },
+    [exercises]
   );
 
   const cancelWorkout = useCallback(() => {
@@ -492,6 +574,65 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   }, []);
 
+  const generateWarmupSets = useCallback((workoutExerciseId: string) => {
+    setActiveSession((prev) => {
+      if (!prev) return null;
+      return {
+        ...prev,
+        exercises: prev.exercises.map((ex) => {
+          if (ex.id !== workoutExerciseId) return ex;
+
+          // Determine base working weight
+          const firstWorkingSet = ex.sets.find((s) => s.type !== 'warmup' && s.weightKg > 0);
+          const baseWeight = firstWorkingSet ? firstWorkingSet.weightKg : (ex.sets[0]?.weightKg || 40);
+
+          // Step rounding helper (2.5kg for barbells/machines, 2kg for dumbbells)
+          const step = ex.equipment === 'halteres' ? 2 : 2.5;
+          const roundToStep = (val: number) => Math.max(step, Math.round(val / step) * step);
+
+          let warmupConfigs: { weight: number; reps: number }[];
+          if (baseWeight <= 20) {
+            warmupConfigs = [
+              { weight: roundToStep(baseWeight * 0.5), reps: 10 },
+            ];
+          } else {
+            // Standard progressive ramp-up: 50% x 8, 70% x 4, 85% x 2
+            warmupConfigs = [
+              { weight: roundToStep(baseWeight * 0.5), reps: 8 },
+              { weight: roundToStep(baseWeight * 0.7), reps: 4 },
+              { weight: roundToStep(baseWeight * 0.85), reps: 2 },
+            ];
+          }
+
+          const newWarmupSets: WorkoutSet[] = warmupConfigs.map((cfg, idx) => ({
+            id: `warmup-${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 6)}`,
+            setNumber: 0,
+            type: 'warmup',
+            weightKg: cfg.weight,
+            reps: cfg.reps,
+            completed: false,
+          }));
+
+          // Keep completed sets and non-warmup sets
+          const nonWarmupOrDone = ex.sets.filter((s) => s.completed || s.type !== 'warmup');
+          const combined = [...newWarmupSets, ...nonWarmupOrDone].map((s, idx) => ({
+            ...s,
+            setNumber: idx + 1,
+          }));
+
+          return {
+            ...ex,
+            sets: combined,
+          };
+        }),
+      };
+    });
+
+    if (Platform.OS !== 'web') {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+    }
+  }, []);
+
   const removeSet = useCallback((workoutExerciseId: string, setId: string) => {
     setActiveSession((prev) => {
       if (!prev) return null;
@@ -644,6 +785,33 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updated = await StorageService.deleteSession(sessionId);
     setSessions(updated);
   }, []);
+
+  const updateSession = useCallback(async (updatedSession: WorkoutSession) => {
+    let totalVolume = 0;
+    let completedSetsCount = 0;
+    for (const ex of updatedSession.exercises) {
+      for (const s of ex.sets) {
+        if (s.completed) {
+          totalVolume += s.weightKg * s.reps;
+          completedSetsCount += 1;
+        }
+      }
+    }
+
+    const finalSession: WorkoutSession = {
+      ...updatedSession,
+      totalVolumeKg: Math.round(totalVolume),
+      completedSetsCount,
+    };
+
+    const updatedSessions = sessions.map((s) => (s.id === finalSession.id ? finalSession : s));
+    setSessions(updatedSessions);
+    await StorageService.saveSessions(updatedSessions);
+
+    if (Platform.OS !== 'web') {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+    }
+  }, [sessions]);
 
   const deleteExercise = useCallback(async (exerciseId: string) => {
     const updated = await StorageService.deleteExercise(exerciseId);
@@ -853,14 +1021,17 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         restTimer,
         isLoading,
         startWorkout,
+        startWorkoutFromSession,
         finishWorkout,
         cancelWorkout,
         deleteSession,
+        updateSession,
         addExerciseToActiveWorkout,
         removeExerciseFromActiveWorkout,
         updateExerciseNotes,
         toggleSuperset,
         addSetToExercise,
+        generateWarmupSets,
         removeSet,
         updateSet,
         toggleSetCompleted,

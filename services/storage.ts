@@ -100,7 +100,12 @@ export const StorageService = {
     try {
       const data = await AsyncStorage.getItem(KEYS.SESSIONS);
       if (data) {
-        return JSON.parse(data);
+        const parsed: WorkoutSession[] = JSON.parse(data);
+        const filtered = parsed.filter((s) => s.id !== 'sample-session-1');
+        if (filtered.length !== parsed.length) {
+          await this.saveSessions(filtered);
+        }
+        return filtered;
       }
       await AsyncStorage.setItem(KEYS.SESSIONS, JSON.stringify(INITIAL_RECENT_SESSIONS));
       return INITIAL_RECENT_SESSIONS;

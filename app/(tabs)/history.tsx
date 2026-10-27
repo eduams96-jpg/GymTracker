@@ -7,17 +7,52 @@ import {
   TouchableOpacity,
   Alert,
 } from 'react-native';
+import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useGym } from '../../context/GymContext';
+import { EditWorkoutModal } from '../../components/EditWorkoutModal';
 import { WorkoutSession } from '../../types/gym';
 import GymTheme from '../../constants/theme';
 
 export default function HistoryScreen() {
-  const { sessions, deleteSession } = useGym();
+  const router = useRouter();
+  const {
+    sessions,
+    deleteSession,
+    updateSession,
+    startWorkoutFromSession,
+    cancelWorkout,
+    activeSession,
+  } = useGym();
   const [expandedSessionId, setExpandedSessionId] = useState<string | null>(null);
+  const [editingSession, setEditingSession] = useState<WorkoutSession | null>(null);
 
   const toggleExpand = (id: string) => {
     setExpandedSessionId((prev) => (prev === id ? null : id));
+  };
+
+  const handleRepeatWorkout = (session: WorkoutSession) => {
+    if (activeSession) {
+      Alert.alert(
+        'Treino Ativo em Curso',
+        `Já tens o treino "${activeSession.title}" a decorrer. Desejas descartar o treino atual e repetir "${session.title}"?`,
+        [
+          { text: 'Cancelar', style: 'cancel' },
+          {
+            text: 'Descartar & Repetir',
+            style: 'destructive',
+            onPress: () => {
+              cancelWorkout();
+              startWorkoutFromSession(session);
+              router.push('/active-workout');
+            },
+          },
+        ]
+      );
+    } else {
+      startWorkoutFromSession(session);
+      router.push('/active-workout');
+    }
   };
 
   const confirmDelete = (session: WorkoutSession) => {
@@ -78,6 +113,13 @@ export default function HistoryScreen() {
                 </TouchableOpacity>
 
                 <View style={styles.headerActions}>
+                  <TouchableOpacity
+                    onPress={() => setEditingSession(item)}
+                    style={styles.editHeaderBtn}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                    <Ionicons name="pencil-outline" size={17} color={GymTheme.colors.textSecondary} />
+                  </TouchableOpacity>
+
                   <TouchableOpacity
                     onPress={() => confirmDelete(item)}
                     style={styles.deleteBtn}
@@ -148,6 +190,25 @@ export default function HistoryScreen() {
                 )}
               </View>
 
+              {/* Card Actions: Repetir & Editar */}
+              <View style={styles.cardActionsRow}>
+                <TouchableOpacity
+                  style={styles.repeatBtn}
+                  onPress={() => handleRepeatWorkout(item)}
+                  activeOpacity={0.85}>
+                  <Ionicons name="repeat" size={15} color="#022c22" />
+                  <Text style={styles.repeatBtnText}>Repetir Treino</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.editBtn}
+                  onPress={() => setEditingSession(item)}
+                  activeOpacity={0.8}>
+                  <Ionicons name="pencil" size={14} color={GymTheme.colors.textSecondary} />
+                  <Text style={styles.editBtnText}>Editar</Text>
+                </TouchableOpacity>
+              </View>
+
               {/* Expanded details */}
               {isExpanded && (
                 <View style={styles.expandedContent}>
@@ -195,6 +256,14 @@ export default function HistoryScreen() {
             </Text>
           </View>
         }
+      />
+
+      {/* Edit Workout Modal */}
+      <EditWorkoutModal
+        visible={!!editingSession}
+        session={editingSession}
+        onClose={() => setEditingSession(null)}
+        onSave={updateSession}
       />
     </View>
   );
@@ -254,6 +323,47 @@ const styles = StyleSheet.create({
   },
   deleteBtn: {
     padding: 4,
+  },
+  editHeaderBtn: {
+    padding: 4,
+  },
+  cardActionsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 12,
+  },
+  repeatBtn: {
+    flex: 1.5,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: GymTheme.colors.primary,
+    paddingVertical: 10,
+    borderRadius: GymTheme.borderRadius.md,
+  },
+  repeatBtnText: {
+    color: '#022c22',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  editBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: GymTheme.colors.surface,
+    borderWidth: 1,
+    borderColor: GymTheme.colors.border,
+    paddingVertical: 10,
+    borderRadius: GymTheme.borderRadius.md,
+  },
+  editBtnText: {
+    color: GymTheme.colors.textSecondary,
+    fontSize: 13,
+    fontWeight: '700',
   },
   metricsRow: {
     flexDirection: 'row',

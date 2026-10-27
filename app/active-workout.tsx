@@ -20,6 +20,7 @@ import { SetRow } from '../components/SetRow';
 import { ExerciseSelectModal } from '../components/ExerciseSelectModal';
 import { WorkoutSummaryModal } from '../components/WorkoutSummaryModal';
 import { OneRepMaxCalculatorModal } from '../components/OneRepMaxCalculatorModal';
+import { PlateCalculatorModal } from '../components/PlateCalculatorModal';
 import { WorkoutSession, WorkoutSet } from '../types/gym';
 import GymTheme from '../constants/theme';
 
@@ -41,6 +42,7 @@ export default function ActiveWorkoutScreen() {
     updateExerciseNotes,
     toggleSuperset,
     addSetToExercise,
+    generateWarmupSets,
     removeSet,
     updateSet,
     toggleSetCompleted,
@@ -50,7 +52,16 @@ export default function ActiveWorkoutScreen() {
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [isExerciseModalOpen, setIsExerciseModalOpen] = useState(false);
   const [is1RMModalOpen, setIs1RMModalOpen] = useState(false);
+  const [isPlateModalOpen, setIsPlateModalOpen] = useState(false);
+  const [plateModalWeight, setPlateModalWeight] = useState(60);
+  const [plateTargetInfo, setPlateTargetInfo] = useState<{ exerciseId?: string; setId?: string } | null>(null);
   const [completedSummarySession, setCompletedSummarySession] = useState<WorkoutSession | null>(null);
+
+  const openPlateCalculator = useCallback((weight?: number, exerciseId?: string, setId?: string) => {
+    setPlateModalWeight(weight && weight > 0 ? weight : 60);
+    setPlateTargetInfo(exerciseId ? { exerciseId, setId } : null);
+    setIsPlateModalOpen(true);
+  }, []);
 
   // Calories tracking state
   const [customCalories, setCustomCalories] = useState<string>('');
@@ -226,6 +237,22 @@ export default function ActiveWorkoutScreen() {
     }
   }
 
+  const handleApplyPlateWeight = useCallback(
+    (w: number) => {
+      if (plateTargetInfo?.exerciseId && plateTargetInfo?.setId) {
+        updateSet(plateTargetInfo.exerciseId, plateTargetInfo.setId, { weightKg: w });
+      } else if (plateTargetInfo?.exerciseId) {
+        const ex = activeSession?.exercises.find((e) => e.id === plateTargetInfo.exerciseId);
+        if (ex && ex.sets.length > 0) {
+          updateSet(ex.id, ex.sets[0].id, { weightKg: w });
+        }
+      } else if (activeFocusTarget) {
+        updateSet(activeFocusTarget.workoutExerciseId, activeFocusTarget.set.id, { weightKg: w });
+      }
+    },
+    [plateTargetInfo, updateSet, activeSession, activeFocusTarget]
+  );
+
   const allSetsCompleted =
     activeSession.exercises.length > 0 &&
     activeSession.exercises.every((e) => e.sets.every((s) => s.completed));
@@ -252,6 +279,13 @@ export default function ActiveWorkoutScreen() {
         </View>
 
         <View style={styles.topActions}>
+          <TouchableOpacity
+            style={styles.calcIconBtn}
+            onPress={() => openPlateCalculator(activeFocusTarget?.set.weightKg || 60)}
+            hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}>
+            <Ionicons name="barbell-outline" size={20} color={GymTheme.colors.primary} />
+          </TouchableOpacity>
+
           <TouchableOpacity
             style={styles.calcIconBtn}
             onPress={() => setIs1RMModalOpen(true)}
@@ -337,6 +371,22 @@ export default function ActiveWorkoutScreen() {
                 </View>
 
                 <View style={styles.headerRightActions}>
+                  {/* Plate Calculator Button */}
+                  <TouchableOpacity
+                    style={styles.smallActionBtn}
+                    onPress={() => openPlateCalculator(exercise.sets[0]?.weightKg || 60, exercise.id)}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                    <Ionicons name="barbell-outline" size={16} color={GymTheme.colors.primary} />
+                  </TouchableOpacity>
+
+                  {/* Warmup Generator Button */}
+                  <TouchableOpacity
+                    style={styles.smallActionBtn}
+                    onPress={() => generateWarmupSets(exercise.id)}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                    <Ionicons name="flame-outline" size={16} color="#F59E0B" />
+                  </TouchableOpacity>
+
                   {/* Superset Toggle Button */}
                   <TouchableOpacity
                     style={[styles.smallActionBtn, isSuperset && styles.smallActionBtnActive]}
@@ -368,6 +418,25 @@ export default function ActiveWorkoutScreen() {
                     <Ionicons name="close-circle-outline" size={20} color={GymTheme.colors.textMuted} />
                   </TouchableOpacity>
                 </View>
+              </View>
+
+              {/* Quick Exercise Utilities */}
+              <View style={styles.cardUtilitiesRow}>
+                <TouchableOpacity
+                  style={styles.utilPillWarmup}
+                  onPress={() => generateWarmupSets(exercise.id)}
+                  activeOpacity={0.7}>
+                  <Ionicons name="flame" size={12} color="#F59E0B" />
+                  <Text style={styles.utilPillWarmupText}>+ Aquecimento Auto</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.utilPillPlate}
+                  onPress={() => openPlateCalculator(exercise.sets[0]?.weightKg || 60, exercise.id)}
+                  activeOpacity={0.7}>
+                  <Ionicons name="disc" size={12} color="#60A5FA" />
+                  <Text style={styles.utilPillPlateText}>Discos por Lado</Text>
+                </TouchableOpacity>
               </View>
 
               {/* Exercise Note banner if present */}
@@ -451,6 +520,14 @@ export default function ActiveWorkoutScreen() {
       <OneRepMaxCalculatorModal
         visible={is1RMModalOpen}
         onClose={() => setIs1RMModalOpen(false)}
+      />
+
+      {/* Plate Calculator Modal */}
+      <PlateCalculatorModal
+        visible={isPlateModalOpen}
+        initialWeight={plateModalWeight}
+        onClose={() => setIsPlateModalOpen(false)}
+        onApplyWeight={handleApplyPlateWeight}
       />
 
       {/* Calorie Edit Modal */}
@@ -618,6 +695,19 @@ export default function ActiveWorkoutScreen() {
                   });
                 }}>
                 <Text style={styles.microStepText}>+2.5</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.microStepBtn}
+                activeOpacity={0.7}
+                onPress={() =>
+                  openPlateCalculator(
+                    activeFocusTarget!.set.weightKg,
+                    activeFocusTarget!.workoutExerciseId,
+                    activeFocusTarget!.set.id
+                  )
+                }>
+                <Ionicons name="barbell" size={13} color={GymTheme.colors.primary} />
               </TouchableOpacity>
             </View>
 
@@ -898,6 +988,45 @@ const styles = StyleSheet.create({
     color: GymTheme.colors.textSecondary,
     fontSize: 12,
     flex: 1,
+  },
+  cardUtilitiesRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 2,
+    marginBottom: 4,
+  },
+  utilPillWarmup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(245, 158, 11, 0.1)',
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: 'rgba(245, 158, 11, 0.25)',
+  },
+  utilPillWarmupText: {
+    color: '#FBBF24',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  utilPillPlate: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(59, 130, 246, 0.1)',
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: 'rgba(59, 130, 246, 0.25)',
+  },
+  utilPillPlateText: {
+    color: '#60A5FA',
+    fontSize: 11,
+    fontWeight: '700',
   },
   columnHeaders: {
     flexDirection: 'row',

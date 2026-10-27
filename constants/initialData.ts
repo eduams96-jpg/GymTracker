@@ -275,47 +275,7 @@ export const DEFAULT_TEMPLATES: WorkoutTemplate[] = [
   },
 ];
 
-export const INITIAL_RECENT_SESSIONS: WorkoutSession[] = [
-  {
-    id: 'sample-session-1',
-    title: 'Push (Peito, Ombros & Tríceps)',
-    templateId: 'tpl-push',
-    startTime: Date.now() - 86400000 * 2, // 2 days ago
-    endTime: Date.now() - 86400000 * 2 + 3600000,
-    durationSeconds: 3420, // 57 min
-    totalVolumeKg: 4620,
-    completedSetsCount: 15,
-    prCount: 1,
-    caloriesBurned: 480,
-    exercises: [
-      {
-        id: 'we-1',
-        exerciseId: 'ex-bench-press',
-        exerciseName: 'Supino Reto com Barra',
-        muscleGroup: 'peito',
-        equipment: 'barra',
-        sets: [
-          { id: 's1', setNumber: 1, type: 'warmup', weightKg: 40, reps: 12, completed: true },
-          { id: 's2', setNumber: 2, type: 'normal', weightKg: 70, reps: 10, completed: true },
-          { id: 's3', setNumber: 3, type: 'normal', weightKg: 80, reps: 8, completed: true },
-          { id: 's4', setNumber: 4, type: 'normal', weightKg: 85, reps: 6, completed: true },
-        ],
-      },
-      {
-        id: 'we-2',
-        exerciseId: 'ex-incline-db-press',
-        exerciseName: 'Supino Inclinado com Halteres',
-        muscleGroup: 'peito',
-        equipment: 'halteres',
-        sets: [
-          { id: 's5', setNumber: 1, type: 'normal', weightKg: 24, reps: 10, completed: true },
-          { id: 's6', setNumber: 2, type: 'normal', weightKg: 26, reps: 8, completed: true },
-          { id: 's7', setNumber: 3, type: 'normal', weightKg: 28, reps: 8, completed: true },
-        ],
-      },
-    ],
-  },
-];
+export const INITIAL_RECENT_SESSIONS: WorkoutSession[] = [];
 
 export const INITIAL_BODY_METRICS: BodyMetricLog[] = [
   {
