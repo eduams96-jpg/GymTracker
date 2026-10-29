@@ -52,10 +52,16 @@ export interface WorkoutExercise {
   sets: WorkoutSet[];
 }
 
+export interface TemplateSetConfig {
+  type: SetType;
+  reps: number;
+}
+
 export interface TemplateExerciseConfig {
   exerciseId: string;
   targetSets: number;
-  targetReps: number;
+  targetReps: number; // Reps da primeira série de trabalho (compatibilidade)
+  sets?: TemplateSetConfig[]; // Séries individuais (reps e tipo por série, ex: 1×5 + 3×6 + drop-set)
   targetWeightKg?: number;
   restSeconds?: number;
 }

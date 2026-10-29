@@ -11,12 +11,14 @@ interface SetRowProps {
   onToggleComplete: () => void;
   onDelete: () => void;
   isNextActive?: boolean;
+  displayNumber?: number; // Number among working sets (warm-ups/drops don't count)
 }
 
 export const SetRow: React.FC<SetRowProps> = ({
   set,
   workoutExerciseId,
   isNextActive = false,
+  displayNumber,
   onUpdate,
   onToggleComplete,
   onDelete,
@@ -42,7 +44,7 @@ export const SetRow: React.FC<SetRowProps> = ({
       case 'failure':
         return { label: 'F', bg: 'rgba(245, 158, 11, 0.2)', color: '#FBBF24' };
       default:
-        return { label: `${set.setNumber}`, bg: 'transparent', color: GymTheme.colors.textSecondary };
+        return { label: `${displayNumber ?? set.setNumber}`, bg: 'transparent', color: GymTheme.colors.textSecondary };
     }
   };
 

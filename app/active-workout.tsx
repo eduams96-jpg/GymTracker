@@ -459,10 +459,15 @@ export default function ActiveWorkoutScreen() {
               </View>
 
               {/* Sets list */}
-              {exercise.sets.map((set) => (
+              {exercise.sets.map((set, setIdx) => (
                 <SetRow
                   key={set.id}
                   set={set}
+                  displayNumber={
+                    exercise.sets
+                      .slice(0, setIdx + 1)
+                      .filter((s) => s.type === 'normal' || s.type === 'failure').length
+                  }
                   workoutExerciseId={exercise.id}
                   isNextActive={activeFocusTarget?.set.id === set.id}
                   onUpdate={(updates) => updateSet(exercise.id, set.id, updates)}

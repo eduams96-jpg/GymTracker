@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -9,21 +9,68 @@ import {
   SafeAreaView,
   Alert,
 } from 'react-native';
-import { useRouter, useLocalSearchParams, useNavigation } from 'expo-router';
+import { useRouter, useLocalSearchParams, useNavigation, usePreventRemove } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useGym } from '../context/GymContext';
-import { Exercise, MuscleGroup, TemplateExerciseConfig } from '../types/gym';
+import { Exercise, MuscleGroup, SetType, TemplateExerciseConfig, TemplateSetConfig } from '../types/gym';
 import { ExerciseSelectModal } from '../components/ExerciseSelectModal';
+import { expandTemplateSets } from '../services/storage';
 import GymTheme from '../constants/theme';
 
 interface RoutineExerciseItem {
   exercise: Exercise;
-  targetSets: number;
-  targetReps: number;
+  sets: TemplateSetConfig[];
   restSeconds: number;
   targetWeightKg?: number;
 }
+
+const MAX_SETS = 12;
+
+const NEXT_SET_TYPE: Record<SetType, SetType> = {
+  normal: 'warmup',
+  warmup: 'drop',
+  drop: 'failure',
+  failure: 'normal',
+};
+
+const SET_TYPE_LABEL: Record<SetType, string> = {
+  normal: 'Normal',
+  warmup: 'Aquecimento',
+  drop: 'Drop-set',
+  failure: 'Até à falha',
+};
+
+const getSetBadge = (type: SetType, workingNumber: number) => {
+  switch (type) {
+    case 'warmup':
+      return { label: 'A', bg: 'rgba(59, 130, 246, 0.2)', color: '#60A5FA' };
+    case 'drop':
+      return { label: 'D', bg: 'rgba(239, 68, 68, 0.2)', color: '#F87171' };
+    case 'failure':
+      return { label: 'F', bg: 'rgba(245, 158, 11, 0.2)', color: '#FBBF24' };
+    default:
+      return { label: `${workingNumber}`, bg: GymTheme.colors.card, color: GymTheme.colors.textSecondary };
+  }
+};
+
+// Compact summary, ex: "1×5 · 3×6 · +1 drop"
+const summarizeSets = (sets: TemplateSetConfig[]) => {
+  const parts: string[] = [];
+  const working = sets.filter((st) => st.type === 'normal' || st.type === 'failure');
+  let i = 0;
+  while (i < working.length) {
+    let j = i;
+    while (j < working.length && working[j].reps === working[i].reps) j++;
+    parts.push(`${j - i}×${working[i].reps}`);
+    i = j;
+  }
+  const warmups = sets.filter((st) => st.type === 'warmup').length;
+  const drops = sets.filter((st) => st.type === 'drop').length;
+  if (warmups) parts.unshift(`${warmups} aquec.`);
+  if (drops) parts.push(`+${drops} drop`);
+  return parts.join(' · ');
+};
 
 export default function NewRoutineScreen() {
   const router = useRouter();
@@ -52,8 +99,7 @@ export default function NewRoutineScreen() {
         const cfg = editingTemplate.exerciseConfigs?.find((c) => c.exerciseId === exId);
         return {
           exercise: ex,
-          targetSets: cfg?.targetSets ?? 3,
-          targetReps: cfg?.targetReps ?? 10,
+          sets: expandTemplateSets(cfg).map((st) => ({ ...st })),
           restSeconds: cfg?.restSeconds ?? ex.defaultRestSeconds ?? 90,
           targetWeightKg: cfg?.targetWeightKg,
         };
@@ -66,6 +112,38 @@ export default function NewRoutineScreen() {
   useEffect(() => {
     navigation.setOptions({ title: editingTemplate ? 'Editar Rotina' : 'Nova Rotina' });
   }, [navigation, editingTemplate]);
+
+  // Warn before leaving with unsaved changes (back button / gesture)
+  const snapshot = JSON.stringify({
+    title,
+    description,
+    exercises: routineExercises.map((e) => [e.exercise.id, e.sets, e.restSeconds]),
+  });
+  const initialSnapshot = useRef<string | null>(null);
+  const [isSaved, setIsSaved] = useState(false);
+
+  useEffect(() => {
+    if (initialSnapshot.current === null && (!editId || hydrated)) {
+      initialSnapshot.current = snapshot;
+    }
+  }, [editId, hydrated, snapshot]);
+
+  const hasUnsavedChanges =
+    !isSaved && initialSnapshot.current !== null && snapshot !== initialSnapshot.current;
+
+  const disablePrevention = usePreventRemove(hasUnsavedChanges, ({ repeat }) => {
+    Alert.alert('Descartar alterações?', 'Tens alterações por guardar nesta rotina.', [
+      { text: 'Continuar a editar', style: 'cancel' },
+      {
+        text: 'Descartar',
+        style: 'destructive',
+        onPress: () => {
+          setIsSaved(true);
+          repeat();
+        },
+      },
+    ]);
+  });
 
   const getSuggestedRest = (ex: Exercise): number => {
     if (ex.defaultRestSeconds) return ex.defaultRestSeconds;
@@ -81,8 +159,7 @@ export default function NewRoutineScreen() {
         ...prev,
         {
           exercise,
-          targetSets: 3,
-          targetReps: 10,
+          sets: Array.from({ length: 3 }, () => ({ type: 'normal' as SetType, reps: 10 })),
           restSeconds: getSuggestedRest(exercise),
         },
       ]);
@@ -103,23 +180,42 @@ export default function NewRoutineScreen() {
     });
   };
 
-  const updateExerciseSets = (exerciseId: string, delta: number) => {
+  const updateSets = (
+    exerciseId: string,
+    updater: (sets: TemplateSetConfig[]) => TemplateSetConfig[]
+  ) => {
     setRoutineExercises((prev) =>
-      prev.map((item) => {
-        if (item.exercise.id !== exerciseId) return item;
-        const newSets = Math.min(10, Math.max(1, item.targetSets + delta));
-        return { ...item, targetSets: newSets };
-      })
+      prev.map((item) =>
+        item.exercise.id === exerciseId ? { ...item, sets: updater(item.sets) } : item
+      )
     );
   };
 
-  const updateExerciseReps = (exerciseId: string, delta: number) => {
-    setRoutineExercises((prev) =>
-      prev.map((item) => {
-        if (item.exercise.id !== exerciseId) return item;
-        const newReps = Math.min(50, Math.max(1, item.targetReps + delta));
-        return { ...item, targetReps: newReps };
-      })
+  const addSet = (exerciseId: string, type: SetType) => {
+    updateSets(exerciseId, (sets) => {
+      if (sets.length >= MAX_SETS) return sets;
+      const last = sets[sets.length - 1];
+      return [...sets, { type, reps: last ? last.reps : 10 }];
+    });
+  };
+
+  const removeSet = (exerciseId: string, setIndex: number) => {
+    updateSets(exerciseId, (sets) =>
+      sets.length <= 1 ? sets : sets.filter((_, i) => i !== setIndex)
+    );
+  };
+
+  const updateSetReps = (exerciseId: string, setIndex: number, delta: number) => {
+    updateSets(exerciseId, (sets) =>
+      sets.map((st, i) =>
+        i === setIndex ? { ...st, reps: Math.min(50, Math.max(1, st.reps + delta)) } : st
+      )
+    );
+  };
+
+  const cycleSetType = (exerciseId: string, setIndex: number) => {
+    updateSets(exerciseId, (sets) =>
+      sets.map((st, i) => (i === setIndex ? { ...st, type: NEXT_SET_TYPE[st.type] } : st))
     );
   };
 
@@ -153,8 +249,11 @@ export default function NewRoutineScreen() {
 
     const exerciseConfigs: TemplateExerciseConfig[] = routineExercises.map((item) => ({
       exerciseId: item.exercise.id,
-      targetSets: item.targetSets,
-      targetReps: item.targetReps,
+      targetSets: item.sets.length,
+      targetReps:
+        item.sets.find((st) => st.type === 'normal' || st.type === 'failure')?.reps ??
+        item.sets[0].reps,
+      sets: item.sets,
       restSeconds: item.restSeconds,
       targetWeightKg: item.targetWeightKg,
     }));
@@ -173,6 +272,8 @@ export default function NewRoutineScreen() {
       await saveNewTemplate({ ...payload, isCustom: true });
     }
 
+    setIsSaved(true);
+    disablePrevention();
     router.back();
   };
 
@@ -286,45 +387,86 @@ export default function NewRoutineScreen() {
                     </View>
                   </View>
 
-                  {/* Steppers: Target Sets & Reps */}
-                  <View style={styles.steppersRow}>
-                    <View style={styles.stepperBox}>
-                      <Text style={styles.stepperLabel}>SÉRIES</Text>
-                      <View style={styles.stepperControl}>
-                        <TouchableOpacity
-                          style={styles.stepperActionBtn}
-                          onPress={() => updateExerciseSets(item.exercise.id, -1)}
-                          hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}>
-                          <Ionicons name="remove" size={16} color={GymTheme.colors.textPrimary} />
-                        </TouchableOpacity>
-                        <Text style={styles.stepperValueText}>{item.targetSets}</Text>
-                        <TouchableOpacity
-                          style={styles.stepperActionBtn}
-                          onPress={() => updateExerciseSets(item.exercise.id, 1)}
-                          hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}>
-                          <Ionicons name="add" size={16} color={GymTheme.colors.textPrimary} />
-                        </TouchableOpacity>
-                      </View>
+                  {/* Per-set plan: reps and type for each set */}
+                  <View style={styles.setsBox}>
+                    <View style={styles.setsHeader}>
+                      <Text style={styles.stepperLabel}>SÉRIES ({item.sets.length})</Text>
+                      <Text style={styles.setsSummary} numberOfLines={1}>
+                        {summarizeSets(item.sets)}
+                      </Text>
                     </View>
 
-                    <View style={styles.stepperBox}>
-                      <Text style={styles.stepperLabel}>REPETIÇÕES</Text>
-                      <View style={styles.stepperControl}>
-                        <TouchableOpacity
-                          style={styles.stepperActionBtn}
-                          onPress={() => updateExerciseReps(item.exercise.id, -1)}
-                          hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}>
-                          <Ionicons name="remove" size={16} color={GymTheme.colors.textPrimary} />
-                        </TouchableOpacity>
-                        <Text style={styles.stepperValueText}>{item.targetReps}</Text>
-                        <TouchableOpacity
-                          style={styles.stepperActionBtn}
-                          onPress={() => updateExerciseReps(item.exercise.id, 1)}
-                          hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}>
-                          <Ionicons name="add" size={16} color={GymTheme.colors.textPrimary} />
-                        </TouchableOpacity>
-                      </View>
+                    {(() => {
+                      let workingCount = 0;
+                      return item.sets.map((st, setIndex) => {
+                        if (st.type === 'normal' || st.type === 'failure') workingCount += 1;
+                        const badge = getSetBadge(st.type, workingCount);
+                        return (
+                          <View key={setIndex} style={styles.setRow}>
+                            <TouchableOpacity
+                              style={[styles.setBadge, { backgroundColor: badge.bg }]}
+                              onPress={() => cycleSetType(item.exercise.id, setIndex)}
+                              hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
+                              <Text style={[styles.setBadgeText, { color: badge.color }]}>
+                                {badge.label}
+                              </Text>
+                            </TouchableOpacity>
+                            <Text style={styles.setTypeText}>{SET_TYPE_LABEL[st.type]}</Text>
+
+                            <View style={styles.setRepsControl}>
+                              <TouchableOpacity
+                                style={styles.stepperActionBtn}
+                                onPress={() => updateSetReps(item.exercise.id, setIndex, -1)}
+                                hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}>
+                                <Ionicons name="remove" size={16} color={GymTheme.colors.textPrimary} />
+                              </TouchableOpacity>
+                              <Text style={styles.setRepsText}>
+                                {st.reps}
+                                <Text style={styles.setRepsUnit}> reps</Text>
+                              </Text>
+                              <TouchableOpacity
+                                style={styles.stepperActionBtn}
+                                onPress={() => updateSetReps(item.exercise.id, setIndex, 1)}
+                                hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}>
+                                <Ionicons name="add" size={16} color={GymTheme.colors.textPrimary} />
+                              </TouchableOpacity>
+                            </View>
+
+                            <TouchableOpacity
+                              onPress={() => removeSet(item.exercise.id, setIndex)}
+                              disabled={item.sets.length <= 1}
+                              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                              style={[styles.trashBtn, item.sets.length <= 1 && styles.disabledAction]}>
+                              <Ionicons name="close" size={16} color={GymTheme.colors.textMuted} />
+                            </TouchableOpacity>
+                          </View>
+                        );
+                      });
+                    })()}
+
+                    <View style={styles.addSetRow}>
+                      <TouchableOpacity
+                        style={[styles.addSetChip, item.sets.length >= MAX_SETS && styles.disabledAction]}
+                        disabled={item.sets.length >= MAX_SETS}
+                        onPress={() => addSet(item.exercise.id, 'normal')}>
+                        <Ionicons name="add" size={14} color={GymTheme.colors.primary} />
+                        <Text style={styles.addSetChipText}>Série</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[
+                          styles.addSetChip,
+                          styles.addDropChip,
+                          item.sets.length >= MAX_SETS && styles.disabledAction,
+                        ]}
+                        disabled={item.sets.length >= MAX_SETS}
+                        onPress={() => addSet(item.exercise.id, 'drop')}>
+                        <Ionicons name="trending-down" size={14} color="#F87171" />
+                        <Text style={[styles.addSetChipText, { color: '#F87171' }]}>Drop-set</Text>
+                      </TouchableOpacity>
                     </View>
+                    <Text style={styles.setsHint}>
+                      Toca no número da série para mudar o tipo (A aquecimento · D drop-set · F falha).
+                    </Text>
                   </View>
 
                   {/* Rest Selector Chips */}
@@ -381,6 +523,9 @@ export default function NewRoutineScreen() {
         visible={isModalOpen}
         onClose={() => setIsModalOpen(false)}
         onSelectExercise={handleAddExercise}
+        selectedIds={routineExercises.map((e) => e.exercise.id)}
+        onDeselectExercise={(ex) => handleRemoveExercise(ex.id)}
+        keepOpenOnSelect
       />
     </SafeAreaView>
   );
@@ -506,19 +651,94 @@ const styles = StyleSheet.create({
   disabledAction: {
     opacity: 0.25,
   },
-  steppersRow: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  stepperBox: {
-    flex: 1,
+  setsBox: {
     backgroundColor: GymTheme.colors.surface,
     borderRadius: GymTheme.borderRadius.md,
-    padding: 8,
+    padding: 10,
     borderWidth: 1,
     borderColor: GymTheme.colors.border,
-    alignItems: 'center',
     gap: 6,
+  },
+  setsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  setsSummary: {
+    color: GymTheme.colors.primary,
+    fontSize: 12,
+    fontWeight: '700',
+    flexShrink: 1,
+  },
+  setRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  setBadge: {
+    width: 30,
+    height: 30,
+    borderRadius: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: GymTheme.colors.border,
+  },
+  setBadgeText: {
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  setTypeText: {
+    flex: 1,
+    color: GymTheme.colors.textMuted,
+    fontSize: 12,
+  },
+  setRepsControl: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  setRepsText: {
+    color: GymTheme.colors.primary,
+    fontSize: 16,
+    fontWeight: '800',
+    minWidth: 62,
+    textAlign: 'center',
+  },
+  setRepsUnit: {
+    color: GymTheme.colors.textMuted,
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  addSetRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 4,
+  },
+  addSetChip: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    paddingVertical: 8,
+    borderRadius: GymTheme.borderRadius.md,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: GymTheme.colors.primary,
+  },
+  addDropChip: {
+    borderColor: '#F87171',
+  },
+  addSetChipText: {
+    color: GymTheme.colors.primary,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  setsHint: {
+    color: GymTheme.colors.textMuted,
+    fontSize: 10,
   },
   stepperLabel: {
     color: GymTheme.colors.textMuted,
@@ -542,11 +762,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     borderWidth: 1,
     borderColor: GymTheme.colors.border,
-  },
-  stepperValueText: {
-    color: GymTheme.colors.primary,
-    fontSize: 16,
-    fontWeight: '800',
   },
   restConfigRow: {
     gap: 6,

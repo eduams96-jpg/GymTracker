@@ -12,7 +12,7 @@ import {
   ProgressPhoto,
   PRAlert,
 } from '../types/gym';
-import { StorageService } from '../services/storage';
+import { StorageService, expandTemplateSets } from '../services/storage';
 import { audioAlertService } from '../services/audioAlert';
 
 interface RestTimerState {
@@ -298,29 +298,52 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             // Get template config if defined
             const cfg = template.exerciseConfigs?.find((c) => c.exerciseId === exId);
 
+            const setPlan = expandTemplateSets(cfg);
+            const workingReps = setPlan
+              .filter((p) => p.type === 'normal' || p.type === 'failure')
+              .map((p) => p.reps);
+
             // Last session values drive the progressive overload suggestion
             const lastSessionExercise = StorageService.getLastSessionExercise(sessions, exId);
             const suggestion = StorageService.getProgressionSuggestion(
               lastSessionExercise,
-              cfg?.targetReps,
+              cfg ? workingReps : undefined,
               exInfo.equipment
             );
             const defaultWeight = suggestion?.weightKg ?? cfg?.targetWeightKg ?? 20;
-            const defaultReps = suggestion?.reps ?? cfg?.targetReps ?? 10;
-            const targetSetsCount = cfg?.targetSets || 3;
+            const defaultReps = suggestion?.reps ?? workingReps[0] ?? 10;
+            // Bodyweight progression suggests +1 rep: apply it to every working set
+            const repOffset = cfg && suggestion && workingReps.length > 0 ? suggestion.reps - workingReps[0] : 0;
             const restSeconds = cfg?.restSeconds || exInfo.defaultRestSeconds || 90;
 
-            const sets: WorkoutSet[] = Array.from({ length: targetSetsCount }, (_, i) => i + 1).map((num) => ({
-              id: `set-${Date.now()}-${Math.random().toString(36).substring(2, 7)}-${num}`,
-              setNumber: num,
-              type: 'normal',
-              weightKg: defaultWeight,
-              reps: defaultReps,
-              completed: false,
-              previousRecord: lastSessionExercise?.sets?.[num - 1]
-                ? `${lastSessionExercise.sets[num - 1].weightKg}kg × ${lastSessionExercise.sets[num - 1].reps}`
-                : undefined,
-            }));
+            const step = exInfo.equipment === 'halteres' ? 2 : 2.5;
+            const roundToStep = (val: number) => Math.max(0, Math.round(val / step) * step);
+
+            let prevWeight = defaultWeight;
+            const sets: WorkoutSet[] = setPlan.map((plan, i) => {
+              const num = i + 1;
+              let weightKg = defaultWeight;
+              let reps = cfg ? plan.reps : defaultReps;
+              if (plan.type === 'warmup') {
+                weightKg = roundToStep(defaultWeight * 0.5);
+              } else if (plan.type === 'drop') {
+                // Each drop strips ~25% off the previous set's load
+                weightKg = roundToStep(prevWeight * 0.75);
+              } else {
+                reps += repOffset;
+              }
+              if (plan.type !== 'warmup') prevWeight = weightKg;
+              const prev = lastSessionExercise?.sets?.[i];
+              return {
+                id: `set-${Date.now()}-${Math.random().toString(36).substring(2, 7)}-${num}`,
+                setNumber: num,
+                type: plan.type,
+                weightKg,
+                reps,
+                completed: false,
+                previousRecord: prev ? `${prev.weightKg}kg × ${prev.reps}` : undefined,
+              };
+            });
 
             return {
               id: `we-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
@@ -730,8 +753,12 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (Platform.OS !== 'web') {
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
         }
-        // Use the rest time configured for this exercise (routine / suggested default)
-        startRestTimer(ex.restSeconds || 90);
+        // Drop sets follow straight away, so skip the rest before one
+        const nextSet = ex.sets[ex.sets.findIndex((s) => s.id === setId) + 1];
+        if (nextSet?.type !== 'drop') {
+          // Use the rest time configured for this exercise (routine / suggested default)
+          startRestTimer(ex.restSeconds || 90);
+        }
         checkLivePR(ex.exerciseId, ex.exerciseName, target);
       }
     },

@@ -7,8 +7,10 @@ import {
   TextInput,
   TouchableOpacity,
   ScrollView,
-  SafeAreaView,
+  Platform,
+  StatusBar,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import GymTheme from '../constants/theme';
 
@@ -57,16 +59,23 @@ export const OneRepMaxCalculatorModal: React.FC<OneRepMaxCalculatorModalProps> =
     { percent: 60, repsRange: '15-20 reps', focus: 'Resistência / Aquecimento' },
   ];
 
+  const insets = useSafeAreaInsets();
+  const topInset = Math.max(insets.top, Platform.OS === 'android' ? StatusBar.currentHeight || 0 : 0);
+
   return (
     <Modal
       visible={visible}
       animationType="slide"
       transparent={false}
+      statusBarTranslucent
       onRequestClose={onClose}>
-      <SafeAreaView style={styles.safeArea}>
+      <View style={[styles.safeArea, { paddingTop: topInset }]}>
         {/* Header */}
         <View style={styles.header}>
-          <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
+          <TouchableOpacity
+            onPress={onClose}
+            style={styles.closeBtn}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
             <Ionicons name="close" size={24} color={GymTheme.colors.textPrimary} />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Calculadora de 1RM</Text>
@@ -160,7 +169,7 @@ export const OneRepMaxCalculatorModal: React.FC<OneRepMaxCalculatorModalProps> =
             </View>
           </View>
         </ScrollView>
-      </SafeAreaView>
+      </View>
     </Modal>
   );
 };

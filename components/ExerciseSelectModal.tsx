@@ -7,8 +7,10 @@ import {
   TextInput,
   TouchableOpacity,
   FlatList,
-  SafeAreaView,
+  Platform,
+  StatusBar,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useGym } from '../context/GymContext';
 import { Exercise, MuscleGroup } from '../types/gym';
@@ -18,6 +20,11 @@ interface ExerciseSelectModalProps {
   visible: boolean;
   onClose: () => void;
   onSelectExercise: (exercise: Exercise) => void;
+  // Multi-select mode (routine editor): the list stays open, already chosen
+  // exercises are marked and tapping them again calls onDeselectExercise
+  selectedIds?: string[];
+  onDeselectExercise?: (exercise: Exercise) => void;
+  keepOpenOnSelect?: boolean;
 }
 
 const MUSCLE_FILTERS: { key: MuscleGroup | 'todos'; label: string }[] = [
@@ -35,8 +42,14 @@ export const ExerciseSelectModal: React.FC<ExerciseSelectModalProps> = ({
   visible,
   onClose,
   onSelectExercise,
+  selectedIds = [],
+  onDeselectExercise,
+  keepOpenOnSelect = false,
 }) => {
   const { exercises, addCustomExercise } = useGym();
+  const insets = useSafeAreaInsets();
+  // On Android the modal draws under the status bar, so pad the header below it
+  const topInset = Math.max(insets.top, Platform.OS === 'android' ? StatusBar.currentHeight || 0 : 0);
   const [search, setSearch] = useState('');
   const [selectedMuscle, setSelectedMuscle] = useState<MuscleGroup | 'todos'>('todos');
   const [isCreatingNew, setIsCreatingNew] = useState(false);
@@ -71,7 +84,16 @@ export const ExerciseSelectModal: React.FC<ExerciseSelectModalProps> = ({
     setNewExerciseName('');
     setIsCreatingNew(false);
     onSelectExercise(created);
-    onClose();
+    if (!keepOpenOnSelect) onClose();
+  };
+
+  const handlePressExercise = (item: Exercise) => {
+    if (selectedIds.includes(item.id)) {
+      onDeselectExercise?.(item);
+      return;
+    }
+    onSelectExercise(item);
+    if (!keepOpenOnSelect) onClose();
   };
 
   return (
@@ -79,16 +101,21 @@ export const ExerciseSelectModal: React.FC<ExerciseSelectModalProps> = ({
       visible={visible}
       animationType="slide"
       transparent={false}
+      statusBarTranslucent
       onRequestClose={onClose}>
-      <SafeAreaView style={styles.safeArea}>
+      <View style={[styles.safeArea, { paddingTop: topInset }]}>
         <View style={styles.header}>
-          <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
+          <TouchableOpacity
+            onPress={onClose}
+            style={styles.closeBtn}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
             <Ionicons name="close" size={24} color={GymTheme.colors.textPrimary} />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Selecionar Exercício</Text>
           <TouchableOpacity
             onPress={() => setIsCreatingNew(!isCreatingNew)}
-            style={styles.newBtn}>
+            style={styles.newBtn}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
             <Ionicons
               name={isCreatingNew ? 'list' : 'add'}
               size={22}
@@ -196,14 +223,17 @@ export const ExerciseSelectModal: React.FC<ExerciseSelectModalProps> = ({
             <FlatList
               data={filteredExercises}
               keyExtractor={(item) => item.id}
-              contentContainerStyle={styles.listContent}
-              renderItem={({ item }) => (
+              contentContainerStyle={[
+                styles.listContent,
+                !keepOpenOnSelect && { paddingBottom: Math.max(insets.bottom, 16) + 24 },
+              ]}
+              keyboardShouldPersistTaps="handled"
+              renderItem={({ item }) => {
+                const isSelected = selectedIds.includes(item.id);
+                return (
                 <TouchableOpacity
-                  style={styles.exerciseCard}
-                  onPress={() => {
-                    onSelectExercise(item);
-                    onClose();
-                  }}
+                  style={[styles.exerciseCard, isSelected && styles.exerciseCardSelected]}
+                  onPress={() => handlePressExercise(item)}
                   activeOpacity={0.7}>
                   <View style={styles.exerciseLeft}>
                     <View style={styles.muscleIcon}>
@@ -222,12 +252,13 @@ export const ExerciseSelectModal: React.FC<ExerciseSelectModalProps> = ({
                   </View>
 
                   <Ionicons
-                    name="add-circle-outline"
+                    name={isSelected ? 'checkmark-circle' : 'add-circle-outline'}
                     size={24}
                     color={GymTheme.colors.primary}
                   />
                 </TouchableOpacity>
-              )}
+                );
+              }}
               ListEmptyComponent={
                 <View style={styles.emptyContainer}>
                   <Text style={styles.emptyText}>Nenhum exercício encontrado</Text>
@@ -241,7 +272,20 @@ export const ExerciseSelectModal: React.FC<ExerciseSelectModalProps> = ({
             />
           </>
         )}
-      </SafeAreaView>
+
+        {/* Thumb-reachable footer to finish picking in multi-select mode */}
+        {keepOpenOnSelect && !isCreatingNew && (
+          <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, 12) + 8 }]}>
+            <TouchableOpacity style={styles.doneBtn} onPress={onClose} activeOpacity={0.8}>
+              <Text style={styles.doneBtnText}>
+                {selectedIds.length > 0
+                  ? `Concluído (${selectedIds.length} na rotina)`
+                  : 'Fechar'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        )}
+      </View>
     </Modal>
   );
 };
@@ -261,7 +305,7 @@ const styles = StyleSheet.create({
     borderBottomColor: GymTheme.colors.border,
   },
   closeBtn: {
-    padding: 4,
+    padding: 8,
   },
   headerTitle: {
     color: GymTheme.colors.textPrimary,
@@ -269,7 +313,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   newBtn: {
-    padding: 4,
+    padding: 8,
   },
   searchBar: {
     flexDirection: 'row',
@@ -330,6 +374,28 @@ const styles = StyleSheet.create({
     borderRadius: GymTheme.borderRadius.lg,
     borderWidth: 1,
     borderColor: GymTheme.colors.cardBorder,
+  },
+  exerciseCardSelected: {
+    borderColor: GymTheme.colors.primary,
+    backgroundColor: 'rgba(16, 185, 129, 0.08)',
+  },
+  footer: {
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: GymTheme.colors.border,
+    backgroundColor: GymTheme.colors.background,
+  },
+  doneBtn: {
+    backgroundColor: GymTheme.colors.primary,
+    paddingVertical: 14,
+    borderRadius: GymTheme.borderRadius.lg,
+    alignItems: 'center',
+  },
+  doneBtnText: {
+    color: '#052e16',
+    fontSize: 16,
+    fontWeight: '700',
   },
   exerciseLeft: {
     flexDirection: 'row',

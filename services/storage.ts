@@ -10,6 +10,8 @@ import {
   PersonalRecord,
   BodyMetricLog,
   ProgressPhoto,
+  TemplateExerciseConfig,
+  TemplateSetConfig,
 } from '../types/gym';
 import {
   DEFAULT_EXERCISES,
@@ -37,6 +39,17 @@ export interface ExerciseHistoryPoint {
   totalVolume: number;
   bestReps: number;
   estimated1RM: number;
+}
+
+/**
+ * Returns the per-set plan of a routine exercise. Older routines only stored
+ * targetSets × targetReps, so those expand into identical normal sets.
+ */
+export function expandTemplateSets(cfg: TemplateExerciseConfig | undefined): TemplateSetConfig[] {
+  if (cfg?.sets && cfg.sets.length > 0) return cfg.sets;
+  const count = cfg?.targetSets || 3;
+  const reps = cfg?.targetReps ?? 10;
+  return Array.from({ length: count }, () => ({ type: 'normal' as const, reps }));
 }
 
 export const StorageService = {
@@ -334,24 +347,31 @@ export const StorageService = {
    */
   getProgressionSuggestion(
     lastExercise: WorkoutExercise | null,
-    targetReps: number | undefined,
+    targetReps: number | number[] | undefined,
     equipment: EquipmentType
   ): { weightKg: number; reps: number; hint?: string } | null {
     if (!lastExercise) return null;
+    // Drop sets are done at reduced load by design, so they don't drive progression
     const workingSets = lastExercise.sets.filter(
-      (s) => s.completed && s.type !== 'warmup' && s.reps > 0
+      (s) => s.completed && s.type !== 'warmup' && s.type !== 'drop' && s.reps > 0
     );
     if (workingSets.length === 0) return null;
 
     const topWeight = Math.max(...workingSets.map((s) => s.weightKg));
-    const goalReps = targetReps ?? workingSets[0].reps;
-    const hitAllReps = workingSets.every((s) => s.reps >= goalReps);
+    // Per-set targets (ex: 5, 6, 6, 6) are compared set by set
+    const perSetGoals = Array.isArray(targetReps) && targetReps.length > 0 ? targetReps : null;
+    const goalReps = perSetGoals ? perSetGoals[0] : (targetReps as number | undefined) ?? workingSets[0].reps;
+    const hitAllReps = workingSets.every(
+      (s, i) => s.reps >= (perSetGoals ? perSetGoals[Math.min(i, perSetGoals.length - 1)] : goalReps)
+    );
+    const goalLabel =
+      perSetGoals && new Set(perSetGoals).size > 1 ? perSetGoals.join('/') : `${goalReps}`;
 
     if (equipment === 'peso_corporal' || topWeight <= 0) {
       if (hitAllReps) {
-        return { weightKg: topWeight, reps: goalReps + 1, hint: `+1 rep (fizeste ${goalReps} em todas as séries)` };
+        return { weightKg: topWeight, reps: goalReps + 1, hint: `+1 rep (fizeste ${goalLabel} em todas as séries)` };
       }
-      return { weightKg: topWeight, reps: goalReps, hint: `Repete ${goalReps} reps até completares todas` };
+      return { weightKg: topWeight, reps: goalReps, hint: `Repete ${goalLabel} reps até completares todas` };
     }
 
     if (hitAllReps) {
@@ -359,13 +379,13 @@ export const StorageService = {
       return {
         weightKg: topWeight + increment,
         reps: goalReps,
-        hint: `+${increment} kg — completaste ${goalReps} reps a ${topWeight} kg na última vez`,
+        hint: `+${increment} kg — completaste ${goalLabel} reps a ${topWeight} kg na última vez`,
       };
     }
     return {
       weightKg: topWeight,
       reps: goalReps,
-      hint: `Mantém ${topWeight} kg até fazeres ${goalReps} reps em todas as séries`,
+      hint: `Mantém ${topWeight} kg até fazeres ${goalLabel} reps em todas as séries`,
     };
   },
 
