@@ -45,7 +45,10 @@
           "cameraPermission": "Permitir o acesso à câmara para tirar fotos de evolução corporal."
         }
       ],
-      "expo-audio"
+      "expo-audio",
+      "expo-asset",
+      "expo-status-bar",
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true

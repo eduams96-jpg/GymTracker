@@ -16,6 +16,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useKeepAwake } from 'expo-keep-awake';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useGym } from '../context/GymContext';
+import { describeStorageError } from '../services/storage';
 import { SetRow } from '../components/SetRow';
 import { ExerciseSelectModal } from '../components/ExerciseSelectModal';
 import { WorkoutSummaryModal } from '../components/WorkoutSummaryModal';
@@ -122,9 +123,17 @@ export default function ActiveWorkoutScreen() {
       return;
     }
 
-    const summary = await finishWorkout(currentCalories);
-    if (summary) {
-      setCompletedSummarySession(summary);
+    try {
+      const summary = await finishWorkout(currentCalories);
+      if (summary) {
+        setCompletedSummarySession(summary);
+      }
+    } catch (e) {
+      // O treino em curso é mantido: nada se perde e o utilizador pode tentar de novo
+      Alert.alert(
+        'Não foi possível guardar o treino',
+        describeStorageError(e, 'Ocorreu um erro ao guardar. O treino continua aberto — tenta finalizar novamente.')
+      );
     }
   }, [activeSession, finishWorkout, currentCalories]);
 

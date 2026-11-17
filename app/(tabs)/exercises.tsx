@@ -14,7 +14,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useGym } from '../../context/GymContext';
 import { Exercise, MuscleGroup } from '../../types/gym';
-import { StorageService } from '../../services/storage';
+import { StorageService, describeStorageError } from '../../services/storage';
 import { ExerciseProgressionChart } from '../../components/ExerciseProgressionChart';
 import { OneRepMaxCalculatorModal } from '../../components/OneRepMaxCalculatorModal';
 import GymTheme from '../../constants/theme';
@@ -46,8 +46,12 @@ export default function ExercisesScreen() {
           text: 'Eliminar',
           style: 'destructive',
           onPress: async () => {
-            setSelectedExercise(null);
-            await deleteExercise(ex.id);
+            try {
+              await deleteExercise(ex.id);
+              setSelectedExercise(null);
+            } catch (e) {
+              Alert.alert('Erro', describeStorageError(e, 'Não foi possível eliminar o exercício.'));
+            }
           },
         },
       ]
@@ -73,12 +77,17 @@ export default function ExercisesScreen() {
 
   const handleCreateExercise = async () => {
     if (!newName.trim()) return;
-    await addCustomExercise({
-      name: newName.trim(),
-      muscleGroup: newMuscle,
-      equipment: 'halteres',
-      instructions: newInstructions.trim() || undefined,
-    });
+    try {
+      await addCustomExercise({
+        name: newName.trim(),
+        muscleGroup: newMuscle,
+        equipment: 'halteres',
+        instructions: newInstructions.trim() || undefined,
+      });
+    } catch (e) {
+      Alert.alert('Erro', describeStorageError(e, 'Não foi possível criar o exercício.'));
+      return;
+    }
     setNewName('');
     setNewInstructions('');
     setIsModalOpen(false);

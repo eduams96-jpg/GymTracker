@@ -2,13 +2,13 @@ import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useGym } from '../context/GymContext';
+import { useGym, useRestTimer } from '../context/GymContext';
 import GymTheme from '../constants/theme';
 
 export const RestTimerOverlay: React.FC = () => {
   const insets = useSafeAreaInsets();
+  const restTimer = useRestTimer();
   const {
-    restTimer,
     adjustRestTimer,
     dismissRestTimer,
     isAudioMuted,

@@ -10,6 +10,7 @@ import {
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useGym } from '../../context/GymContext';
+import { describeStorageError } from '../../services/storage';
 import { WorkoutTemplate } from '../../types/gym';
 import GymTheme from '../../constants/theme';
 
@@ -36,11 +37,17 @@ export default function WorkoutsScreen() {
     sessions.length > 0 && (!lastBackupAt || Date.now() - lastBackupAt > BACKUP_INTERVAL_MS);
 
   const handleQuickBackup = async () => {
-    const ok = await exportBackup();
-    if (ok) {
+    let result;
+    try {
+      result = await exportBackup();
+    } catch (e) {
+      Alert.alert('Erro', describeStorageError(e, 'Ocorreu um erro ao exportar o backup.'));
+      return;
+    }
+    if (result.shared) {
       Alert.alert(
         'Cópia de Segurança',
-        'A janela de partilha foi aberta. Conseguiste guardar o ficheiro com sucesso?',
+        `A cópia inclui ${result.photosIncluded} foto(s). A janela de partilha foi aberta. Conseguiste guardar o ficheiro com sucesso?`,
         [
           { text: 'Ainda não', style: 'cancel' },
           {
@@ -99,7 +106,13 @@ export default function WorkoutsScreen() {
         {
           text: 'Eliminar',
           style: 'destructive',
-          onPress: () => deleteTemplate(template.id),
+          onPress: async () => {
+            try {
+              await deleteTemplate(template.id);
+            } catch (e) {
+              Alert.alert('Erro', describeStorageError(e, 'Não foi possível eliminar a rotina.'));
+            }
+          },
         },
       ]
     );

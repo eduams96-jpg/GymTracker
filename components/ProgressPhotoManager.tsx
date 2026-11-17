@@ -13,8 +13,8 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
-import * as FileSystem from 'expo-file-system/legacy';
 import { useGym } from '../context/GymContext';
+import { StorageService, describeStorageError } from '../services/storage';
 import { ProgressPhoto, PhotoPose } from '../types/gym';
 import { ProgressComparisonModal } from './ProgressComparisonModal';
 import GymTheme from '../constants/theme';
@@ -109,20 +109,9 @@ export const ProgressPhotoManager: React.FC = () => {
   const handleSavePhoto = async () => {
     if (!pendingImageUri) return;
 
+    let permanentUri: string | null = null;
     try {
-      const dirPath = `${FileSystem.documentDirectory}gym_photos/`;
-      const dirInfo = await FileSystem.getInfoAsync(dirPath);
-      if (!dirInfo.exists) {
-        await FileSystem.makeDirectoryAsync(dirPath, { intermediates: true });
-      }
-
-      const fileName = `progress_${Date.now()}.jpg`;
-      const permanentUri = `${dirPath}${fileName}`;
-
-      await FileSystem.copyAsync({
-        from: pendingImageUri,
-        to: permanentUri,
-      });
+      permanentUri = await StorageService.importPhotoFile(pendingImageUri);
 
       await addProgressPhoto({
         uri: permanentUri,
@@ -140,7 +129,9 @@ export const ProgressPhotoManager: React.FC = () => {
       setPendingNotes('');
     } catch (e) {
       console.error('Error saving progress photo to storage:', e);
-      Alert.alert('Erro ao guardar', 'Não foi possível guardar a foto na memória local.');
+      // Não deixa o ficheiro copiado órfão se o registo não chegou a ser gravado
+      if (permanentUri) await StorageService.discardPhotoFile(permanentUri);
+      Alert.alert('Erro ao guardar', describeStorageError(e, 'Não foi possível guardar a foto na memória local.'));
     }
   };
 
@@ -151,8 +142,12 @@ export const ProgressPhotoManager: React.FC = () => {
         text: 'Eliminar',
         style: 'destructive',
         onPress: async () => {
-          await deleteProgressPhoto(photo.id);
-          setSelectedPhotoForDetail(null);
+          try {
+            await deleteProgressPhoto(photo.id);
+            setSelectedPhotoForDetail(null);
+          } catch (e) {
+            Alert.alert('Erro', describeStorageError(e, 'Não foi possível eliminar a foto.'));
+          }
         },
       },
     ]);

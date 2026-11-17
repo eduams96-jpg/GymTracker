@@ -19,6 +19,20 @@ import {
   INITIAL_RECENT_SESSIONS,
   INITIAL_BODY_METRICS,
 } from '../constants/initialData';
+import {
+  BackupError,
+  BackupPreview,
+  PhotoFs,
+  buildBackupPayload,
+  materializePhotos,
+  previewBackup as previewBackupPure,
+  validateBackup,
+} from './backup';
+import {
+  calculatePersonalRecords as calculatePersonalRecordsPure,
+  estimate1RM,
+  getProgressionSuggestion as getProgressionSuggestionPure,
+} from './progression';
 
 const KEYS = {
   EXERCISES: '@gym_tracker_exercises_v1',
@@ -31,6 +45,24 @@ const KEYS = {
   LAST_BACKUP_AT: '@gym_tracker_last_backup_at_v1',
 };
 
+const CORRUPT_PREFIX = '@gym_tracker_corrupt_';
+
+/** Erro de gravação com mensagem já pensada para o utilizador. */
+export class StorageError extends Error {
+  readonly cause?: unknown;
+  constructor(message: string, cause?: unknown) {
+    super(message);
+    this.name = 'StorageError';
+    this.cause = cause;
+  }
+}
+
+/** Mensagem apresentável ao utilizador para qualquer erro vindo do armazenamento. */
+export function describeStorageError(e: unknown, fallback = 'Ocorreu um erro inesperado.'): string {
+  if (e instanceof StorageError || e instanceof BackupError) return e.message;
+  return fallback;
+}
+
 export interface ExerciseHistoryPoint {
   date: string;
   timestamp: number;
@@ -39,6 +71,23 @@ export interface ExerciseHistoryPoint {
   totalVolume: number;
   bestReps: number;
   estimated1RM: number;
+}
+
+export interface BackupExportResult {
+  shared: boolean;
+  photosIncluded: number;
+  photosMissing: number;
+}
+
+export interface BackupRestoreResult {
+  exercises: Exercise[];
+  templates: WorkoutTemplate[];
+  sessions: WorkoutSession[];
+  bodyMetrics: BodyMetricLog[];
+  progressPhotos: ProgressPhoto[];
+  photosRestored: number;
+  /** Registos de fotos de backups antigos cujo ficheiro não existe neste dispositivo. */
+  photosDropped: number;
 }
 
 /**
@@ -52,13 +101,91 @@ export function expandTemplateSets(cfg: TemplateExerciseConfig | undefined): Tem
   return Array.from({ length: count }, () => ({ type: 'normal' as const, reps }));
 }
 
+// ---------- Ajudantes de leitura/escrita ----------
+
+/** Guarda uma cópia do valor ilegível para nunca o perder quando os valores por defeito forem gravados. */
+async function preserveCorrupt(key: string, raw: string): Promise<void> {
+  try {
+    await AsyncStorage.setItem(`${CORRUPT_PREFIX}${key.replace('@gym_tracker_', '')}_${Date.now()}`, raw);
+  } catch (e) {
+    console.error('Could not preserve corrupt data for', key, e);
+  }
+}
+
+/** Lê uma lista JSON. Devolve null se não existir ou estiver corrompida (preservando o original). */
+async function readList<T>(key: string): Promise<T[] | null> {
+  const data = await AsyncStorage.getItem(key);
+  if (data === null) return null;
+  try {
+    const parsed = JSON.parse(data);
+    if (Array.isArray(parsed)) return parsed as T[];
+  } catch {
+    // cai para o tratamento de corrupção abaixo
+  }
+  await preserveCorrupt(key, data);
+  return null;
+}
+
+async function writeJson(key: string, value: unknown, what: string): Promise<void> {
+  try {
+    await AsyncStorage.setItem(key, JSON.stringify(value));
+  } catch (e) {
+    console.error(`Error saving ${what}:`, e);
+    throw new StorageError(
+      `Não foi possível guardar ${what}. Verifica o espaço livre no telemóvel e tenta novamente. Os dados anteriores foram mantidos.`,
+      e
+    );
+  }
+}
+
+// ---------- Ficheiros das fotografias ----------
+
+const photoFs: PhotoFs = {
+  async readBase64(uri) {
+    return FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
+  },
+  async writeBase64(uri, data) {
+    await FileSystem.writeAsStringAsync(uri, data, { encoding: FileSystem.EncodingType.Base64 });
+  },
+  async size(uri) {
+    const info = await FileSystem.getInfoAsync(uri);
+    return info.exists ? ((info as { size?: number }).size ?? 0) : null;
+  },
+  async remove(uri) {
+    await FileSystem.deleteAsync(uri, { idempotent: true });
+  },
+  async ensureDir(dir) {
+    const info = await FileSystem.getInfoAsync(dir);
+    if (!info.exists) await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
+  },
+};
+
+function getPhotoDir(): string {
+  if (!FileSystem.documentDirectory) throw new StorageError('O armazenamento de ficheiros não está disponível.');
+  return `${FileSystem.documentDirectory}gym_photos/`;
+}
+
+/** Só apagamos ficheiros dentro da pasta privada da app, nunca originais da galeria. */
+function isManagedPhoto(uri: string): boolean {
+  return !!FileSystem.documentDirectory && uri.startsWith(`${FileSystem.documentDirectory}gym_photos/`);
+}
+
+async function removePhotoFile(uri: string): Promise<boolean> {
+  if (!isManagedPhoto(uri)) return true;
+  try {
+    await photoFs.remove(uri);
+    return true;
+  } catch (e) {
+    console.warn('Could not delete photo file (will be cleaned up on next launch):', uri, e);
+    return false;
+  }
+}
+
 export const StorageService = {
   async getExercises(): Promise<Exercise[]> {
     try {
-      const data = await AsyncStorage.getItem(KEYS.EXERCISES);
-      if (data) {
-        return JSON.parse(data);
-      }
+      const list = await readList<Exercise>(KEYS.EXERCISES);
+      if (list) return list;
       await AsyncStorage.setItem(KEYS.EXERCISES, JSON.stringify(DEFAULT_EXERCISES));
       return DEFAULT_EXERCISES;
     } catch (e) {
@@ -68,31 +195,20 @@ export const StorageService = {
   },
 
   async saveExercises(exercises: Exercise[]): Promise<void> {
-    try {
-      await AsyncStorage.setItem(KEYS.EXERCISES, JSON.stringify(exercises));
-    } catch (e) {
-      console.error('Error saving exercises:', e);
-    }
+    await writeJson(KEYS.EXERCISES, exercises, 'os exercícios');
   },
 
   async deleteExercise(exerciseId: string): Promise<Exercise[]> {
-    try {
-      const current = await this.getExercises();
-      const updated = current.filter((e) => e.id !== exerciseId);
-      await this.saveExercises(updated);
-      return updated;
-    } catch (e) {
-      console.error('Error deleting exercise:', e);
-      return [];
-    }
+    const current = await this.getExercises();
+    const updated = current.filter((e) => e.id !== exerciseId);
+    await this.saveExercises(updated);
+    return updated;
   },
 
   async getTemplates(): Promise<WorkoutTemplate[]> {
     try {
-      const data = await AsyncStorage.getItem(KEYS.TEMPLATES);
-      if (data) {
-        return JSON.parse(data);
-      }
+      const list = await readList<WorkoutTemplate>(KEYS.TEMPLATES);
+      if (list) return list;
       await AsyncStorage.setItem(KEYS.TEMPLATES, JSON.stringify(DEFAULT_TEMPLATES));
       return DEFAULT_TEMPLATES;
     } catch (e) {
@@ -102,18 +218,13 @@ export const StorageService = {
   },
 
   async saveTemplates(templates: WorkoutTemplate[]): Promise<void> {
-    try {
-      await AsyncStorage.setItem(KEYS.TEMPLATES, JSON.stringify(templates));
-    } catch (e) {
-      console.error('Error saving templates:', e);
-    }
+    await writeJson(KEYS.TEMPLATES, templates, 'as rotinas');
   },
 
   async getSessions(): Promise<WorkoutSession[]> {
     try {
-      const data = await AsyncStorage.getItem(KEYS.SESSIONS);
-      if (data) {
-        const parsed: WorkoutSession[] = JSON.parse(data);
+      const parsed = await readList<WorkoutSession>(KEYS.SESSIONS);
+      if (parsed) {
         const filtered = parsed.filter((s) => s.id !== 'sample-session-1');
         if (filtered.length !== parsed.length) {
           await this.saveSessions(filtered);
@@ -129,31 +240,20 @@ export const StorageService = {
   },
 
   async saveSessions(sessions: WorkoutSession[]): Promise<void> {
-    try {
-      await AsyncStorage.setItem(KEYS.SESSIONS, JSON.stringify(sessions));
-    } catch (e) {
-      console.error('Error saving sessions:', e);
-    }
+    await writeJson(KEYS.SESSIONS, sessions, 'os treinos');
   },
 
   async deleteSession(sessionId: string): Promise<WorkoutSession[]> {
-    try {
-      const current = await this.getSessions();
-      const updated = current.filter((s) => s.id !== sessionId);
-      await this.saveSessions(updated);
-      return updated;
-    } catch (e) {
-      console.error('Error deleting session:', e);
-      return [];
-    }
+    const current = await this.getSessions();
+    const updated = current.filter((s) => s.id !== sessionId);
+    await this.saveSessions(updated);
+    return updated;
   },
 
   async getBodyMetrics(): Promise<BodyMetricLog[]> {
     try {
-      const data = await AsyncStorage.getItem(KEYS.BODY_METRICS);
-      if (data) {
-        return JSON.parse(data);
-      }
+      const list = await readList<BodyMetricLog>(KEYS.BODY_METRICS);
+      if (list) return list;
       await AsyncStorage.setItem(KEYS.BODY_METRICS, JSON.stringify(INITIAL_BODY_METRICS));
       return INITIAL_BODY_METRICS;
     } catch (e) {
@@ -163,32 +263,19 @@ export const StorageService = {
   },
 
   async saveBodyMetrics(metrics: BodyMetricLog[]): Promise<void> {
-    try {
-      await AsyncStorage.setItem(KEYS.BODY_METRICS, JSON.stringify(metrics));
-    } catch (e) {
-      console.error('Error saving body metrics:', e);
-    }
+    await writeJson(KEYS.BODY_METRICS, metrics, 'as avaliações corporais');
   },
 
   async updateBodyMetric(id: string, updates: Partial<BodyMetricLog>): Promise<BodyMetricLog[]> {
-    try {
-      const current = await this.getBodyMetrics();
-      const updated = current.map((m) => (m.id === id ? { ...m, ...updates } : m));
-      await this.saveBodyMetrics(updated);
-      return updated;
-    } catch (e) {
-      console.error('Error updating body metric:', e);
-      return [];
-    }
+    const current = await this.getBodyMetrics();
+    const updated = current.map((m) => (m.id === id ? { ...m, ...updates } : m));
+    await this.saveBodyMetrics(updated);
+    return updated;
   },
 
   async getProgressPhotos(): Promise<ProgressPhoto[]> {
     try {
-      const data = await AsyncStorage.getItem(KEYS.PROGRESS_PHOTOS);
-      if (data) {
-        return JSON.parse(data);
-      }
-      return [];
+      return (await readList<ProgressPhoto>(KEYS.PROGRESS_PHOTOS)) ?? [];
     } catch (e) {
       console.error('Error loading progress photos:', e);
       return [];
@@ -196,41 +283,98 @@ export const StorageService = {
   },
 
   async saveProgressPhotos(photos: ProgressPhoto[]): Promise<void> {
-    try {
-      await AsyncStorage.setItem(KEYS.PROGRESS_PHOTOS, JSON.stringify(photos));
-    } catch (e) {
-      console.error('Error saving progress photos:', e);
-    }
+    await writeJson(KEYS.PROGRESS_PHOTOS, photos, 'as fotografias de progresso');
   },
 
   async addProgressPhoto(photo: ProgressPhoto): Promise<ProgressPhoto[]> {
+    const current = await this.getProgressPhotos();
+    const updated = [photo, ...current];
+    await this.saveProgressPhotos(updated);
+    return updated;
+  },
+
+  /**
+   * Remove primeiro o registo (fonte de verdade) e depois o ficheiro. Se a remoção do
+   * ficheiro falhar o registo já não existe e o ficheiro é limpo no próximo arranque.
+   */
+  async deleteProgressPhoto(photoId: string): Promise<ProgressPhoto[]> {
+    const current = await this.getProgressPhotos();
+    const target = current.find((p) => p.id === photoId);
+    const updated = current.filter((p) => p.id !== photoId);
+    await this.saveProgressPhotos(updated);
+    if (target) await removePhotoFile(target.uri);
+    return updated;
+  },
+
+  /** Pasta privada onde as fotografias são guardadas. */
+  getPhotoDir,
+
+  /** Copia a imagem escolhida para a pasta privada da app e devolve o novo caminho. */
+  async importPhotoFile(sourceUri: string): Promise<string> {
     try {
-      const current = await this.getProgressPhotos();
-      const updated = [photo, ...current];
-      await this.saveProgressPhotos(updated);
-      return updated;
+      const dir = getPhotoDir();
+      await photoFs.ensureDir(dir);
+      const target = `${dir}progress_${Date.now()}.jpg`;
+      await FileSystem.copyAsync({ from: sourceUri, to: target });
+      return target;
     } catch (e) {
-      console.error('Error adding progress photo:', e);
-      return [];
+      if (e instanceof StorageError) throw e;
+      throw new StorageError('Não foi possível guardar a foto na memória do telemóvel.', e);
     }
   },
 
-  async deleteProgressPhoto(photoId: string): Promise<ProgressPhoto[]> {
+  /** Remove um ficheiro de foto criado por importPhotoFile (ex.: quando a gravação do registo falha). */
+  async discardPhotoFile(uri: string): Promise<void> {
+    await removePhotoFile(uri);
+  },
+
+  /**
+   * Apaga ficheiros na pasta de fotos que já não têm registo (resíduos de falhas,
+   * restauros ou eliminações). Só atua se a lista de fotos for lida sem erros e
+   * ignora ficheiros com menos de 2 minutos (podem estar a ser gravados neste momento).
+   */
+  async cleanupOrphanPhotoFiles(): Promise<number> {
     try {
-      const current = await this.getProgressPhotos();
-      const updated = current.filter((p) => p.id !== photoId);
-      await this.saveProgressPhotos(updated);
-      return updated;
+      const raw = await AsyncStorage.getItem(KEYS.PROGRESS_PHOTOS);
+      let referenced: ProgressPhoto[] = [];
+      if (raw !== null) {
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) return 0;
+        referenced = parsed;
+      }
+      const dir = getPhotoDir();
+      const dirInfo = await FileSystem.getInfoAsync(dir);
+      if (!dirInfo.exists) return 0;
+
+      const keep = new Set(referenced.map((p) => p.uri.split('/').pop()));
+      const names = await FileSystem.readDirectoryAsync(dir);
+      const cutoff = Date.now() / 1000 - 120;
+      let removed = 0;
+      for (const name of names) {
+        if (keep.has(name)) continue;
+        const info = await FileSystem.getInfoAsync(`${dir}${name}`);
+        const modified = (info as { modificationTime?: number }).modificationTime;
+        if (info.exists && !info.isDirectory && (modified === undefined || modified < cutoff)) {
+          if (await removePhotoFile(`${dir}${name}`)) removed++;
+        }
+      }
+      return removed;
     } catch (e) {
-      console.error('Error deleting progress photo:', e);
-      return [];
+      console.warn('Orphan photo cleanup skipped:', e);
+      return 0;
     }
   },
 
   async getActiveSession(): Promise<WorkoutSession | null> {
     try {
       const data = await AsyncStorage.getItem(KEYS.ACTIVE_SESSION);
-      return data ? JSON.parse(data) : null;
+      if (!data) return null;
+      try {
+        return JSON.parse(data);
+      } catch {
+        await preserveCorrupt(KEYS.ACTIVE_SESSION, data);
+        return null;
+      }
     } catch (e) {
       console.error('Error loading active session:', e);
       return null;
@@ -246,6 +390,29 @@ export const StorageService = {
       }
     } catch (e) {
       console.error('Error saving active session:', e);
+      throw new StorageError('Não foi possível guardar o treino em curso.', e);
+    }
+  },
+
+  /** Rest timer persistido para sobreviver a o sistema terminar a app em segundo plano. */
+  async getRestTimer(): Promise<{ targetTimestamp: number; totalDuration: number } | null> {
+    try {
+      const raw = await AsyncStorage.getItem(KEYS.REST_TIMER);
+      if (!raw) return null;
+      const v = JSON.parse(raw);
+      if (Number.isFinite(v?.targetTimestamp) && Number.isFinite(v?.totalDuration)) return v;
+      return null;
+    } catch {
+      return null;
+    }
+  },
+
+  async saveRestTimer(timer: { targetTimestamp: number; totalDuration: number } | null): Promise<void> {
+    try {
+      if (!timer) await AsyncStorage.removeItem(KEYS.REST_TIMER);
+      else await AsyncStorage.setItem(KEYS.REST_TIMER, JSON.stringify(timer));
+    } catch (e) {
+      console.warn('Could not persist rest timer:', e);
     }
   },
 
@@ -256,75 +423,38 @@ export const StorageService = {
     bodyMetrics: BodyMetricLog[];
     progressPhotos: ProgressPhoto[];
   }> {
+    const oldPhotos = await this.getProgressPhotos();
+
+    // Uma única operação: ou tudo é reposto ou nada é alterado.
     try {
-      await AsyncStorage.multiRemove([
-        KEYS.EXERCISES,
-        KEYS.TEMPLATES,
-        KEYS.SESSIONS,
-        KEYS.ACTIVE_SESSION,
-        KEYS.REST_TIMER,
-        KEYS.BODY_METRICS,
-        KEYS.PROGRESS_PHOTOS,
+      await AsyncStorage.multiSet([
+        [KEYS.EXERCISES, JSON.stringify(DEFAULT_EXERCISES)],
+        [KEYS.TEMPLATES, JSON.stringify(DEFAULT_TEMPLATES)],
+        [KEYS.SESSIONS, JSON.stringify([])],
+        [KEYS.BODY_METRICS, JSON.stringify([])],
+        [KEYS.PROGRESS_PHOTOS, JSON.stringify([])],
       ]);
-
-      await AsyncStorage.setItem(KEYS.EXERCISES, JSON.stringify(DEFAULT_EXERCISES));
-      await AsyncStorage.setItem(KEYS.TEMPLATES, JSON.stringify(DEFAULT_TEMPLATES));
-      await AsyncStorage.setItem(KEYS.SESSIONS, JSON.stringify([]));
-      await AsyncStorage.setItem(KEYS.BODY_METRICS, JSON.stringify([]));
-      await AsyncStorage.setItem(KEYS.PROGRESS_PHOTOS, JSON.stringify([]));
-
-      return {
-        exercises: DEFAULT_EXERCISES,
-        templates: DEFAULT_TEMPLATES,
-        sessions: [],
-        bodyMetrics: [],
-        progressPhotos: [],
-      };
     } catch (e) {
       console.error('Error resetting all data:', e);
-      return {
-        exercises: DEFAULT_EXERCISES,
-        templates: DEFAULT_TEMPLATES,
-        sessions: [],
-        bodyMetrics: [],
-        progressPhotos: [],
-      };
+      throw new StorageError('Não foi possível repor os dados. Nada foi apagado.', e);
     }
+    await AsyncStorage.multiRemove([KEYS.ACTIVE_SESSION, KEYS.REST_TIMER]).catch(() => {});
+
+    // Ficheiros das fotos: melhor esforço, o que falhar é limpo no próximo arranque.
+    for (const p of oldPhotos) await removePhotoFile(p.uri);
+    await this.cleanupOrphanPhotoFiles();
+
+    return {
+      exercises: DEFAULT_EXERCISES,
+      templates: DEFAULT_TEMPLATES,
+      sessions: [],
+      bodyMetrics: [],
+      progressPhotos: [],
+    };
   },
 
   calculatePersonalRecords(sessions: WorkoutSession[]): Record<string, PersonalRecord> {
-    const prMap: Record<string, PersonalRecord> = {};
-
-    for (const session of sessions) {
-      const sessionDate = new Date(session.startTime).toISOString();
-      for (const ex of session.exercises) {
-        for (const set of ex.sets) {
-          if (!set.completed || set.type === 'warmup' || set.weightKg <= 0 || set.reps <= 0) {
-            continue;
-          }
-
-          const est1RM = Math.round(
-            set.reps === 1
-              ? set.weightKg
-              : set.weightKg * (36 / (37 - Math.min(set.reps, 30)))
-          );
-
-          const currentPR = prMap[ex.exerciseId];
-          if (!currentPR || set.weightKg > currentPR.maxWeightKg) {
-            prMap[ex.exerciseId] = {
-              exerciseId: ex.exerciseId,
-              exerciseName: ex.exerciseName,
-              maxWeightKg: set.weightKg,
-              bestReps: set.reps,
-              bestDate: sessionDate,
-              estimated1RM: est1RM,
-            };
-          }
-        }
-      }
-    }
-
-    return prMap;
+    return calculatePersonalRecordsPure(sessions);
   },
 
   getLastSessionExercise(sessions: WorkoutSession[], exerciseId: string) {
@@ -342,51 +472,15 @@ export const StorageService = {
 
   /**
    * Progressive overload suggestion based on the last session of an exercise.
-   * Rule: if every completed working set reached the target reps, suggest a
-   * small load increase; otherwise keep the same load.
+   * Only suggests an increase when all planned working sets were completed and
+   * reached the target reps (see services/progression.ts).
    */
   getProgressionSuggestion(
     lastExercise: WorkoutExercise | null,
     targetReps: number | number[] | undefined,
     equipment: EquipmentType
   ): { weightKg: number; reps: number; hint?: string } | null {
-    if (!lastExercise) return null;
-    // Drop sets are done at reduced load by design, so they don't drive progression
-    const workingSets = lastExercise.sets.filter(
-      (s) => s.completed && s.type !== 'warmup' && s.type !== 'drop' && s.reps > 0
-    );
-    if (workingSets.length === 0) return null;
-
-    const topWeight = Math.max(...workingSets.map((s) => s.weightKg));
-    // Per-set targets (ex: 5, 6, 6, 6) are compared set by set
-    const perSetGoals = Array.isArray(targetReps) && targetReps.length > 0 ? targetReps : null;
-    const goalReps = perSetGoals ? perSetGoals[0] : (targetReps as number | undefined) ?? workingSets[0].reps;
-    const hitAllReps = workingSets.every(
-      (s, i) => s.reps >= (perSetGoals ? perSetGoals[Math.min(i, perSetGoals.length - 1)] : goalReps)
-    );
-    const goalLabel =
-      perSetGoals && new Set(perSetGoals).size > 1 ? perSetGoals.join('/') : `${goalReps}`;
-
-    if (equipment === 'peso_corporal' || topWeight <= 0) {
-      if (hitAllReps) {
-        return { weightKg: topWeight, reps: goalReps + 1, hint: `+1 rep (fizeste ${goalLabel} em todas as séries)` };
-      }
-      return { weightKg: topWeight, reps: goalReps, hint: `Repete ${goalLabel} reps até completares todas` };
-    }
-
-    if (hitAllReps) {
-      const increment = equipment === 'halteres' ? 2 : 2.5;
-      return {
-        weightKg: topWeight + increment,
-        reps: goalReps,
-        hint: `+${increment} kg — completaste ${goalLabel} reps a ${topWeight} kg na última vez`,
-      };
-    }
-    return {
-      weightKg: topWeight,
-      reps: goalReps,
-      hint: `Mantém ${topWeight} kg até fazeres ${goalLabel} reps em todas as séries`,
-    };
+    return getProgressionSuggestionPure(lastExercise, targetReps, equipment);
   },
 
   async getLastBackupAt(): Promise<number | null> {
@@ -406,29 +500,9 @@ export const StorageService = {
     }
   },
 
-  /** Parses a backup without writing anything, to show a confirmation summary. */
-  previewBackup(jsonString: string): {
-    exportedAt?: string;
-    sessions: number;
-    templates: number;
-    exercises: number;
-    bodyMetrics: number;
-    progressPhotos: number;
-  } | null {
-    try {
-      const data = JSON.parse(jsonString);
-      if (!data.exercises || !data.templates || !data.sessions) return null;
-      return {
-        exportedAt: data.exportedAt,
-        sessions: data.sessions.length,
-        templates: data.templates.length,
-        exercises: data.exercises.length,
-        bodyMetrics: (data.bodyMetrics || []).length,
-        progressPhotos: (data.progressPhotos || []).length,
-      };
-    } catch {
-      return null;
-    }
+  /** Valida um backup sem escrever nada, para mostrar o resumo de confirmação. */
+  previewBackup(jsonString: string): BackupPreview | null {
+    return previewBackupPure(jsonString);
   },
 
   getExerciseHistory(sessions: WorkoutSession[], exerciseId: string): ExerciseHistoryPoint[] {
@@ -452,7 +526,7 @@ export const StorageService = {
         if (st.weightKg > maxWeight) {
           maxWeight = st.weightKg;
           bestReps = st.reps;
-          est1RM = Math.round(st.reps === 1 ? st.weightKg : st.weightKg * (36 / (37 - Math.min(st.reps, 30))));
+          est1RM = estimate1RM(st.weightKg, st.reps);
         }
       }
 
@@ -470,82 +544,132 @@ export const StorageService = {
     return points;
   },
 
+  /**
+   * Cria o backup (v4, com as fotografias embebidas) e abre a partilha.
+   * Lança erro se a leitura/escrita falhar; devolve `shared: false` apenas se a
+   * partilha não estiver disponível no dispositivo.
+   */
   async shareBackupFile(
     exercises: Exercise[],
     templates: WorkoutTemplate[],
     sessions: WorkoutSession[],
     bodyMetrics: BodyMetricLog[] = [],
     progressPhotos: ProgressPhoto[] = []
-  ): Promise<boolean> {
+  ): Promise<BackupExportResult> {
+    const cacheDir = FileSystem.cacheDirectory;
+    if (!cacheDir) throw new StorageError('A pasta temporária não está disponível neste dispositivo.');
+
+    // Cópias anteriores (podem conter fotos e dados de saúde) não devem ficar na cache.
     try {
-      const payload = {
-        version: 3,
-        exportedAt: new Date().toISOString(),
-        exercises,
-        templates,
-        sessions,
-        bodyMetrics,
-        progressPhotos,
-      };
+      for (const name of await FileSystem.readDirectoryAsync(cacheDir)) {
+        if (/^gym_tracker_backup_\d+\.json$/.test(name)) {
+          await FileSystem.deleteAsync(`${cacheDir}${name}`, { idempotent: true });
+        }
+      }
+    } catch {
+      // melhor esforço
+    }
 
-      const jsonString = JSON.stringify(payload, null, 2);
-      const filename = `gym_tracker_backup_${Date.now()}.json`;
-      const fileUri = `${FileSystem.cacheDirectory}${filename}`;
+    let jsonString: string;
+    let included = 0;
+    let missing = 0;
+    try {
+      const payload = await buildBackupPayload(
+        { exercises, templates, sessions, bodyMetrics, progressPhotos },
+        photoFs
+      );
+      included = payload.photoFiles.length;
+      missing = payload.missingPhotoIds.length;
+      jsonString = JSON.stringify(payload);
+    } catch (e) {
+      console.error('Error building backup:', e);
+      throw new StorageError(
+        'Não foi possível preparar a cópia de segurança (memória insuficiente com muitas fotografias?).',
+        e
+      );
+    }
 
+    const fileUri = `${cacheDir}gym_tracker_backup_${Date.now()}.json`;
+    try {
       await FileSystem.writeAsStringAsync(fileUri, jsonString, {
         encoding: FileSystem.EncodingType.UTF8,
       });
-
-      const isAvailable = await Sharing.isAvailableAsync();
-      if (isAvailable) {
-        await Sharing.shareAsync(fileUri, {
-          mimeType: 'application/json',
-          dialogTitle: 'Exportar Cópia de Segurança GymTracker',
-          UTI: 'public.json',
-        });
-        return true;
+      // Confirma que o ficheiro foi escrito por completo antes de o partilhar.
+      const info = await FileSystem.getInfoAsync(fileUri);
+      // (UTF-8 nunca é mais curto do que o número de caracteres da string)
+      const written = (info as { size?: number }).size ?? 0;
+      if (!info.exists || written < jsonString.length) {
+        throw new Error('backup file size mismatch');
       }
-      return false;
-    } catch (err) {
-      console.error('Error sharing backup:', err);
-      return false;
+    } catch (e) {
+      console.error('Error writing backup file:', e);
+      await FileSystem.deleteAsync(fileUri, { idempotent: true }).catch(() => {});
+      throw new StorageError('Não foi possível gravar o ficheiro de cópia de segurança (espaço insuficiente?).', e);
     }
+
+    if (!(await Sharing.isAvailableAsync())) {
+      return { shared: false, photosIncluded: included, photosMissing: missing };
+    }
+    try {
+      await Sharing.shareAsync(fileUri, {
+        mimeType: 'application/json',
+        dialogTitle: 'Exportar Cópia de Segurança GymTracker',
+        UTI: 'public.json',
+      });
+    } catch (e) {
+      console.error('Error sharing backup:', e);
+      throw new StorageError('Não foi possível abrir a janela de partilha.', e);
+    }
+    return { shared: true, photosIncluded: included, photosMissing: missing };
   },
 
-  async parseAndRestoreBackup(
-    jsonString: string
-  ): Promise<{
-    exercises: Exercise[];
-    templates: WorkoutTemplate[];
-    sessions: WorkoutSession[];
-    bodyMetrics: BodyMetricLog[];
-    progressPhotos: ProgressPhoto[];
-  } | null> {
+  /**
+   * Restaura um backup de forma segura:
+   *  1. valida estrutura e integridade das fotos (nada é escrito se falhar);
+   *  2. grava as fotos com nomes novos e confirma o tamanho de cada uma;
+   *  3. grava todas as chaves numa única operação (multiSet);
+   *  4. só depois apaga as fotos antigas que deixaram de ser usadas.
+   * Em qualquer falha anterior ao passo 3 os dados atuais ficam intactos.
+   */
+  async parseAndRestoreBackup(jsonString: string): Promise<BackupRestoreResult> {
+    const backup = validateBackup(jsonString);
+    const previousPhotos = await this.getProgressPhotos();
+
+    const photoResult = await materializePhotos(backup, photoFs, getPhotoDir(), Date.now());
+
     try {
-      const data = JSON.parse(jsonString);
-      if (!data.exercises || !data.templates || !data.sessions) {
-        throw new Error('Formato de backup inválido');
-      }
-
-      const bodyMetrics = data.bodyMetrics || [];
-      const progressPhotos = data.progressPhotos || [];
-
-      await AsyncStorage.setItem(KEYS.EXERCISES, JSON.stringify(data.exercises));
-      await AsyncStorage.setItem(KEYS.TEMPLATES, JSON.stringify(data.templates));
-      await AsyncStorage.setItem(KEYS.SESSIONS, JSON.stringify(data.sessions));
-      await AsyncStorage.setItem(KEYS.BODY_METRICS, JSON.stringify(bodyMetrics));
-      await AsyncStorage.setItem(KEYS.PROGRESS_PHOTOS, JSON.stringify(progressPhotos));
-
-      return {
-        exercises: data.exercises,
-        templates: data.templates,
-        sessions: data.sessions,
-        bodyMetrics,
-        progressPhotos,
-      };
-    } catch (err) {
-      console.error('Error parsing and restoring backup:', err);
-      return null;
+      await AsyncStorage.multiSet([
+        [KEYS.EXERCISES, JSON.stringify(backup.exercises)],
+        [KEYS.TEMPLATES, JSON.stringify(backup.templates)],
+        [KEYS.SESSIONS, JSON.stringify(backup.sessions)],
+        [KEYS.BODY_METRICS, JSON.stringify(backup.bodyMetrics)],
+        [KEYS.PROGRESS_PHOTOS, JSON.stringify(photoResult.photos)],
+      ]);
+    } catch (e) {
+      console.error('Error persisting restored backup:', e);
+      for (const uri of photoResult.written) await removePhotoFile(uri);
+      throw new StorageError(
+        'Não foi possível gravar os dados restaurados. Os dados atuais foram mantidos.',
+        e
+      );
     }
+
+    // Treino em curso e temporizador pertencem ao estado anterior.
+    await AsyncStorage.multiRemove([KEYS.ACTIVE_SESSION, KEYS.REST_TIMER]).catch(() => {});
+
+    const keep = new Set(photoResult.photos.map((p) => p.uri));
+    for (const old of previousPhotos) {
+      if (!keep.has(old.uri)) await removePhotoFile(old.uri);
+    }
+
+    return {
+      exercises: backup.exercises,
+      templates: backup.templates,
+      sessions: backup.sessions,
+      bodyMetrics: backup.bodyMetrics,
+      progressPhotos: photoResult.photos,
+      photosRestored: photoResult.written.length,
+      photosDropped: photoResult.droppedLegacy,
+    };
   },
 };

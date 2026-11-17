@@ -11,7 +11,9 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useGym } from '../../context/GymContext';
-import { StorageService } from '../../services/storage';
+import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system/legacy';
+import { StorageService, describeStorageError } from '../../services/storage';
 import { ExerciseProgressionChart } from '../../components/ExerciseProgressionChart';
 import { OneRepMaxCalculatorModal } from '../../components/OneRepMaxCalculatorModal';
 import { PlateCalculatorModal } from '../../components/PlateCalculatorModal';
@@ -149,8 +151,12 @@ export default function StatsScreen() {
           text: 'Sim, Repor Tudo',
           style: 'destructive',
           onPress: async () => {
-            await resetAllData();
-            Alert.alert('Dados Repostos', 'A aplicação foi reiniciada com sucesso.');
+            try {
+              await resetAllData();
+              Alert.alert('Dados Repostos', 'A aplicação foi reiniciada com sucesso.');
+            } catch (e) {
+              Alert.alert('Erro', describeStorageError(e, 'Não foi possível repor os dados.'));
+            }
           },
         },
       ]
@@ -159,11 +165,17 @@ export default function StatsScreen() {
 
   const handleExport = async () => {
     try {
-      const success = await exportBackup();
-      if (success) {
+      const result = await exportBackup();
+      if (result.shared) {
+        const photoNote =
+          result.photosMissing > 0
+            ? `
+
+⚠️ ${result.photosMissing} foto(s) não foram incluídas porque o ficheiro já não existe no telemóvel.`
+            : '';
         Alert.alert(
           'Cópia de Segurança',
-          'A janela de partilha foi aberta. Conseguiste guardar o ficheiro com sucesso?',
+          `A cópia inclui ${result.photosIncluded} foto(s). A janela de partilha foi aberta. Conseguiste guardar o ficheiro com sucesso?${photoNote}`,
           [
             { text: 'Ainda não', style: 'cancel' },
             {
@@ -178,31 +190,41 @@ export default function StatsScreen() {
       } else {
         Alert.alert('Exportação', 'Não foi possível aceder à partilha de ficheiros.');
       }
-    } catch {
-      Alert.alert('Erro', 'Ocorreu um erro ao exportar o backup.');
+    } catch (e) {
+      Alert.alert('Erro', describeStorageError(e, 'Ocorreu um erro ao exportar o backup.'));
     }
   };
 
-  const handleRestore = async () => {
-    const raw = restoreJsonInput.trim();
-    if (!raw) {
-      Alert.alert('Aviso', 'Cola o conteúdo do ficheiro de backup JSON.');
-      return;
-    }
-
+  /** Valida o backup, mostra o resumo e só restaura após confirmação. */
+  const confirmAndRestore = (raw: string) => {
     const preview = StorageService.previewBackup(raw);
     if (!preview) {
-      Alert.alert('Erro', 'O ficheiro JSON não tem um formato de backup válido.');
+      Alert.alert(
+        'Erro',
+        'O ficheiro não tem um formato de backup válido ou está corrompido. Os dados atuais não foram alterados.'
+      );
       return;
     }
 
     const exportDateStr = preview.exportedAt
       ? new Date(preview.exportedAt).toLocaleDateString('pt-PT')
       : 'Desconhecida';
+    const photoLine =
+      preview.photoFiles > 0 || preview.progressPhotos === 0
+        ? `${preview.progressPhotos} fotos (${preview.photoFiles} com ficheiro)`
+        : `${preview.progressPhotos} fotos (cópia antiga: sem ficheiros de imagem)`;
 
     Alert.alert(
       'Restaurar Cópia de Segurança',
-      `Esta cópia contém:\n• ${preview.sessions} treinos\n• ${preview.templates} rotinas\n• ${preview.exercises} exercícios\n• ${preview.bodyMetrics} avaliações corporais\n• ${preview.progressPhotos} fotos\nExportada a: ${exportDateStr}\n\n⚠️ Atenção: Todos os dados atuais serão substituídos por esta cópia. Desejas avançar?`,
+      `Esta cópia contém:
+• ${preview.sessions} treinos
+• ${preview.templates} rotinas
+• ${preview.exercises} exercícios
+• ${preview.bodyMetrics} avaliações corporais
+• ${photoLine}
+Exportada a: ${exportDateStr}
+
+⚠️ Atenção: Todos os dados atuais serão substituídos por esta cópia. Desejas avançar?`,
       [
         { text: 'Cancelar', style: 'cancel' },
         {
@@ -210,21 +232,57 @@ export default function StatsScreen() {
           style: 'destructive',
           onPress: async () => {
             try {
-              const ok = await restoreBackup(raw);
-              if (ok) {
-                Alert.alert('Sucesso', 'Cópia de segurança restaurada com sucesso!');
-                setIsRestoreModalOpen(false);
-                setRestoreJsonInput('');
-              } else {
-                Alert.alert('Erro', 'Não foi possível restaurar os dados.');
-              }
-            } catch {
-              Alert.alert('Erro', 'Formato JSON inválido.');
+              const result = await restoreBackup(raw);
+              const dropped =
+                result.photosDropped > 0
+                  ? `
+
+${result.photosDropped} foto(s) de uma cópia antiga não foram restauradas porque os ficheiros não existem neste telemóvel.`
+                  : '';
+              Alert.alert(
+                'Sucesso',
+                `Cópia de segurança restaurada com sucesso! ${result.photosRestored} foto(s) recuperadas.${dropped}`
+              );
+              setIsRestoreModalOpen(false);
+              setRestoreJsonInput('');
+            } catch (e) {
+              Alert.alert('Erro', describeStorageError(e, 'Não foi possível restaurar os dados.'));
             }
           },
         },
       ]
     );
+  };
+
+  const handleRestore = () => {
+    const raw = restoreJsonInput.trim();
+    if (!raw) {
+      Alert.alert('Aviso', 'Escolhe o ficheiro de backup ou cola o conteúdo JSON.');
+      return;
+    }
+    confirmAndRestore(raw);
+  };
+
+  const handlePickBackupFile = async () => {
+    let cachedUri: string | null = null;
+    try {
+      const picked = await DocumentPicker.getDocumentAsync({
+        type: ['application/json', 'text/plain', 'application/octet-stream'],
+        copyToCacheDirectory: true,
+      });
+      if (picked.canceled || !picked.assets?.[0]) return;
+      cachedUri = picked.assets[0].uri;
+      const raw = await FileSystem.readAsStringAsync(cachedUri, {
+        encoding: FileSystem.EncodingType.UTF8,
+      });
+      confirmAndRestore(raw);
+    } catch (e) {
+      console.error('Error reading backup file:', e);
+      Alert.alert('Erro', 'Não foi possível ler o ficheiro escolhido.');
+    } finally {
+      // A cópia temporária pode conter fotos e dados de saúde
+      if (cachedUri) FileSystem.deleteAsync(cachedUri, { idempotent: true }).catch(() => {});
+    }
   };
 
   return (
@@ -511,8 +569,16 @@ export default function StatsScreen() {
           <View style={styles.restoreCard}>
             <Text style={styles.restoreTitle}>Restaurar Cópia de Segurança</Text>
             <Text style={styles.restoreSub}>
-              Cola abaixo o conteúdo JSON do teu ficheiro de backup para restaurar treinos, rotinas e exercícios.
+              Escolhe o ficheiro de backup (inclui as fotos de progresso) ou, para cópias antigas, cola o conteúdo JSON abaixo.
             </Text>
+
+            <TouchableOpacity
+              style={styles.restoreBtn}
+              onPress={handlePickBackupFile}
+              activeOpacity={0.8}>
+              <Ionicons name="document-outline" size={18} color={GymTheme.colors.textPrimary} />
+              <Text style={styles.restoreBtnText}>Escolher Ficheiro de Backup</Text>
+            </TouchableOpacity>
 
             <TextInput
               style={styles.restoreInput}

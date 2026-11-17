@@ -13,6 +13,7 @@ import { useRouter, useLocalSearchParams, useNavigation, usePreventRemove } from
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useGym } from '../context/GymContext';
+import { describeStorageError } from '../services/storage';
 import { Exercise, MuscleGroup, SetType, TemplateExerciseConfig, TemplateSetConfig } from '../types/gym';
 import { ExerciseSelectModal } from '../components/ExerciseSelectModal';
 import { expandTemplateSets } from '../services/storage';
@@ -266,10 +267,15 @@ export default function NewRoutineScreen() {
       exerciseConfigs,
     };
 
-    if (editingTemplate) {
-      await updateTemplate(editingTemplate.id, payload);
-    } else {
-      await saveNewTemplate({ ...payload, isCustom: true });
+    try {
+      if (editingTemplate) {
+        await updateTemplate(editingTemplate.id, payload);
+      } else {
+        await saveNewTemplate({ ...payload, isCustom: true });
+      }
+    } catch (e) {
+      Alert.alert('Erro ao guardar', describeStorageError(e, 'Não foi possível guardar a rotina.'));
+      return;
     }
 
     setIsSaved(true);

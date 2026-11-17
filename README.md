@@ -58,14 +58,17 @@ Podes descarregar o ficheiro APK oficial da versão final pronta a instalar dire
 
 ### 7. 🛡️ Cópia de Segurança & Privacidade Total (Offline-First)
 - **100% Local & Privado**: Sem servidores externos, registos de conta ou rastreio.
-- **Exportação e Restauro JSON**: Exporta uma cópia de segurança completa com pré-visualização detalhada dos dados e partilha direta para o Google Drive, WhatsApp ou ficheiros locais.
+- **Exportação e Restauro JSON**: Exporta uma cópia de segurança completa — **incluindo as fotografias de progresso** (formato v4, com verificação de integridade) — com pré-visualização detalhada dos dados e partilha direta para o Google Drive, WhatsApp ou ficheiros locais. O restauro é feito escolhendo o ficheiro (`expo-document-picker`), é validado antes de escrever e não altera os dados atuais se falhar. Cópias antigas (v1–v3) continuam compatíveis, mas não contêm imagens.
+- **Testes**: `npm test` (lógica de progressão, recordes e backup/restauro) e `npm run typecheck`.
+
+> **Rest timer e notificações**: a contagem usa o relógio do sistema e mantém-se correta em segundo plano. O aviso sonoro/háptico só toca com a app aberta; para avisar com o ecrã bloqueado seria necessário `expo-notifications` (permissão `POST_NOTIFICATIONS` no Android 13+), que não foi adicionado por defeito.
 
 ---
 
 ## 🛠️ Stack Tecnológica
 
 - **Framework**: [Expo SDK 58](https://expo.dev) com [React Native 0.88](https://reactnative.dev)
-- **Navegação**: [Expo Router v4](https://docs.expo.dev/router/introduction/) (File-based Routing com Typed Routes)
+- **Navegação**: [Expo Router](https://docs.expo.dev/router/introduction/) (File-based Routing com Typed Routes)
 - **Linguagem**: [TypeScript](https://www.typescriptlang.org/) (Strict Mode)
 - **Persistência**: [@react-native-async-storage/async-storage](https://github.com/react-native-async-storage/async-storage)
 - **Áudio Nativo**: [expo-audio](https://docs.expo.dev/versions/latest/sdk/audio/) (sem conflito R8 / ProGuard, áudio em segundo plano com ducking de música)

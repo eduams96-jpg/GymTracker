@@ -13,6 +13,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useGym } from '../../context/GymContext';
+import { describeStorageError } from '../../services/storage';
 import { BodyMetricLog } from '../../types/gym';
 import { BodyEvolutionChart } from '../../components/BodyEvolutionChart';
 import { ProgressPhotoManager } from '../../components/ProgressPhotoManager';
@@ -256,18 +257,24 @@ export default function BodyTrackingScreen() {
     }
     const dateIso = new Date(targetTimestamp).toISOString();
 
-    if (editingMetricId) {
-      await updateBodyMetric(editingMetricId, {
-        ...payload,
-        timestamp: targetTimestamp,
-        date: dateIso,
-      });
-    } else {
-      await addBodyMetric({
-        date: dateIso,
-        timestamp: targetTimestamp,
-        ...payload,
-      });
+    try {
+      if (editingMetricId) {
+        await updateBodyMetric(editingMetricId, {
+          ...payload,
+          timestamp: targetTimestamp,
+          date: dateIso,
+        });
+      } else {
+        await addBodyMetric({
+          date: dateIso,
+          timestamp: targetTimestamp,
+          ...payload,
+        });
+      }
+    } catch (e) {
+      // Mantém o formulário preenchido para o utilizador poder tentar de novo
+      Alert.alert('Erro ao guardar', describeStorageError(e, 'Não foi possível guardar a avaliação.'));
+      return;
     }
 
     // Reset inputs
@@ -303,7 +310,13 @@ export default function BodyTrackingScreen() {
         {
           text: 'Eliminar',
           style: 'destructive',
-          onPress: () => deleteBodyMetric(log.id),
+          onPress: async () => {
+            try {
+              await deleteBodyMetric(log.id);
+            } catch (e) {
+              Alert.alert('Erro', describeStorageError(e, 'Não foi possível eliminar a avaliação.'));
+            }
+          },
         },
       ]
     );

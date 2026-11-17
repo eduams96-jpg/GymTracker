@@ -83,7 +83,7 @@ export const SetRow: React.FC<SetRowProps> = ({
           placeholderTextColor={GymTheme.colors.textMuted}
           onChangeText={(text) => {
             const val = parseFloat(text.replace(',', '.'));
-            onUpdate({ weightKg: isNaN(val) ? 0 : val });
+            onUpdate({ weightKg: Number.isFinite(val) && val > 0 ? val : 0 });
           }}
         />
         <Text style={styles.unitText}>kg</Text>

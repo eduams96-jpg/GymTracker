@@ -10,6 +10,7 @@ import {
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useGym } from '../../context/GymContext';
+import { describeStorageError } from '../../services/storage';
 import { EditWorkoutModal } from '../../components/EditWorkoutModal';
 import { WorkoutSession } from '../../types/gym';
 import GymTheme from '../../constants/theme';
@@ -64,7 +65,13 @@ export default function HistoryScreen() {
         {
           text: 'Eliminar',
           style: 'destructive',
-          onPress: () => deleteSession(session.id),
+          onPress: async () => {
+            try {
+              await deleteSession(session.id);
+            } catch (e) {
+              Alert.alert('Erro', describeStorageError(e, 'Não foi possível eliminar o treino.'));
+            }
+          },
         },
       ]
     );

@@ -7,12 +7,14 @@ import {
   TextInput,
   TouchableOpacity,
   FlatList,
+  Alert,
   Platform,
   StatusBar,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useGym } from '../context/GymContext';
+import { describeStorageError } from '../services/storage';
 import { Exercise, MuscleGroup } from '../types/gym';
 import GymTheme from '../constants/theme';
 
@@ -76,15 +78,19 @@ export const ExerciseSelectModal: React.FC<ExerciseSelectModalProps> = ({
 
   const handleCreateExercise = async () => {
     if (!newExerciseName.trim()) return;
-    const created = await addCustomExercise({
-      name: newExerciseName.trim(),
-      muscleGroup: newExerciseMuscle,
-      equipment: 'halteres',
-    });
-    setNewExerciseName('');
-    setIsCreatingNew(false);
-    onSelectExercise(created);
-    if (!keepOpenOnSelect) onClose();
+    try {
+      const created = await addCustomExercise({
+        name: newExerciseName.trim(),
+        muscleGroup: newExerciseMuscle,
+        equipment: 'halteres',
+      });
+      setNewExerciseName('');
+      setIsCreatingNew(false);
+      onSelectExercise(created);
+      if (!keepOpenOnSelect) onClose();
+    } catch (e) {
+      Alert.alert('Erro', describeStorageError(e, 'Não foi possível criar o exercício.'));
+    }
   };
 
   const handlePressExercise = (item: Exercise) => {

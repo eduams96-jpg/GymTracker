@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Platform, AppState } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import {
@@ -12,7 +12,12 @@ import {
   ProgressPhoto,
   PRAlert,
 } from '../types/gym';
-import { StorageService, expandTemplateSets } from '../services/storage';
+import {
+  StorageService,
+  expandTemplateSets,
+  BackupExportResult,
+  BackupRestoreResult,
+} from '../services/storage';
 import { audioAlertService } from '../services/audioAlert';
 
 interface RestTimerState {
@@ -29,7 +34,6 @@ interface GymContextType {
   bodyMetrics: BodyMetricLog[];
   activeSession: WorkoutSession | null;
   personalRecords: Record<string, PersonalRecord>;
-  restTimer: RestTimerState;
   isLoading: boolean;
 
   // Actions
@@ -77,8 +81,8 @@ interface GymContextType {
 
   // Reset & Backup
   resetAllData: () => Promise<void>;
-  exportBackup: () => Promise<boolean>;
-  restoreBackup: (jsonString: string) => Promise<boolean>;
+  exportBackup: () => Promise<BackupExportResult>;
+  restoreBackup: (jsonString: string) => Promise<BackupRestoreResult>;
   markBackupSaved: () => Promise<void>;
   lastBackupAt: number | null;
 
@@ -93,6 +97,9 @@ interface GymContextType {
 }
 
 const GymContext = createContext<GymContextType | undefined>(undefined);
+// O temporizador muda várias vezes por segundo: vive num contexto próprio para não
+// re-renderizar todos os ecrãs que usam useGym().
+const RestTimerContext = createContext<RestTimerState | undefined>(undefined);
 
 export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [exercises, setExercises] = useState<Exercise[]>([]);
@@ -118,6 +125,7 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const timerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastAlertSecondRef = useRef<number | null>(null);
+  const restTargetRef = useRef<number | null>(null);
 
   // Load initial data
   useEffect(() => {
@@ -150,11 +158,26 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (loadedActive) {
           setActiveSession(loadedActive);
         }
+
+        // Recupera o descanso em curso se a app foi terminada em segundo plano
+        const savedTimer = await StorageService.getRestTimer();
+        if (savedTimer && loadedActive && savedTimer.targetTimestamp > Date.now()) {
+          setRestTimer({
+            isActive: true,
+            targetTimestamp: savedTimer.targetTimestamp,
+            remainingSeconds: Math.ceil((savedTimer.targetTimestamp - Date.now()) / 1000),
+            totalDuration: savedTimer.totalDuration,
+          });
+        } else if (savedTimer) {
+          StorageService.saveRestTimer(null);
+        }
       } catch (e) {
         console.error('Failed to load storage in GymProvider:', e);
       } finally {
         setIsLoading(false);
       }
+      // Fotos sem registo (falhas anteriores, eliminações incompletas) ocupam espaço
+      StorageService.cleanupOrphanPhotoFiles();
     }
     loadData();
   }, []);
@@ -162,84 +185,67 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Sync activeSession changes to AsyncStorage
   useEffect(() => {
     if (!isLoading) {
-      StorageService.saveActiveSession(activeSession);
+      StorageService.saveActiveSession(activeSession).catch((e) =>
+        console.warn('Active session not persisted:', e)
+      );
     }
   }, [activeSession, isLoading]);
 
+  // Conclui o descanso (partilhado pelo intervalo e pelo regresso ao primeiro plano)
+  const finishRest = useCallback(() => {
+    if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+    timerIntervalRef.current = null;
+    restTargetRef.current = null;
+    setRestTimer((prev) => ({ ...prev, isActive: false, remainingSeconds: 0, targetTimestamp: null }));
+    StorageService.saveRestTimer(null);
+    // Play finish sound chime & double haptic
+    audioAlertService.playCompletionChime();
+    lastAlertSecondRef.current = null;
+  }, []);
+
+  // Recalcula o tempo restante a partir do relógio (não de contagens), por isso
+  // permanece correto depois de a app estar em segundo plano ou o ecrã bloqueado.
+  const syncRestTimer = useCallback(() => {
+    const target = restTargetRef.current;
+    if (target === null) return;
+    const diff = Math.max(0, Math.ceil((target - Date.now()) / 1000));
+    if (diff <= 0) {
+      finishRest();
+      return;
+    }
+    // 3-2-1 countdown beep alert
+    if (diff <= 3 && lastAlertSecondRef.current !== diff) {
+      lastAlertSecondRef.current = diff;
+      audioAlertService.playCountdownTick();
+    }
+    setRestTimer((prev) => (prev.remainingSeconds === diff ? prev : { ...prev, remainingSeconds: diff }));
+  }, [finishRest]);
+
   // Rest Timer countdown interval
   useEffect(() => {
-    if (restTimer.isActive && restTimer.targetTimestamp) {
+    if (!restTimer.isActive || !restTimer.targetTimestamp) return;
+    restTargetRef.current = restTimer.targetTimestamp;
+    if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+    timerIntervalRef.current = setInterval(syncRestTimer, 300);
+    return () => {
       if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+      timerIntervalRef.current = null;
+    };
+  }, [restTimer.isActive, restTimer.targetTimestamp, syncRestTimer]);
 
-      timerIntervalRef.current = setInterval(() => {
-        const now = Date.now();
-        const diff = Math.max(0, Math.ceil((restTimer.targetTimestamp! - now) / 1000));
-
-        if (diff <= 0) {
-          if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
-          setRestTimer((prev) => ({
-            ...prev,
-            isActive: false,
-            remainingSeconds: 0,
-            targetTimestamp: null,
-          }));
-
-          // Play finish sound chime & double haptic
-          audioAlertService.playCompletionChime();
-          lastAlertSecondRef.current = null;
-        } else {
-          // 3-2-1 countdown beep alert
-          if (diff <= 3 && lastAlertSecondRef.current !== diff) {
-            lastAlertSecondRef.current = diff;
-            audioAlertService.playCountdownTick();
-          }
-
-          setRestTimer((prev) => ({
-            ...prev,
-            remainingSeconds: diff,
-          }));
-        }
-      }, 300);
-
-      return () => {
-        if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
-      };
-    }
-  }, [restTimer.isActive, restTimer.targetTimestamp]);
-
-  // Handle background/foreground transitions: sync timer immediately on wake-up and alert if finished
+  // Ao voltar ao primeiro plano sincroniza de imediato (um único listener estável)
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (nextAppState) => {
-      if (nextAppState === 'active' && restTimer.isActive && restTimer.targetTimestamp) {
-        const now = Date.now();
-        const diff = Math.max(0, Math.ceil((restTimer.targetTimestamp - now) / 1000));
-        if (diff <= 0) {
-          if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
-          setRestTimer((prev) => ({
-            ...prev,
-            isActive: false,
-            remainingSeconds: 0,
-            targetTimestamp: null,
-          }));
-          audioAlertService.playCompletionChime();
-          lastAlertSecondRef.current = null;
-        } else {
-          setRestTimer((prev) => ({
-            ...prev,
-            remainingSeconds: diff,
-          }));
-        }
-      }
+      if (nextAppState === 'active') syncRestTimer();
     });
-
-    return () => {
-      subscription.remove();
-    };
-  }, [restTimer.isActive, restTimer.targetTimestamp]);
+    return () => subscription.remove();
+  }, [syncRestTimer]);
 
   const startRestTimer = useCallback((seconds: number) => {
     lastAlertSecondRef.current = null;
     const target = Date.now() + seconds * 1000;
+    restTargetRef.current = target;
+    StorageService.saveRestTimer({ targetTimestamp: target, totalDuration: seconds });
     setRestTimer({
       isActive: true,
       targetTimestamp: target,
@@ -254,8 +260,12 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const adjustRestTimer = useCallback((deltaSeconds: number) => {
     setRestTimer((prev) => {
       if (!prev.isActive || !prev.targetTimestamp) return prev;
-      const newRemaining = Math.max(0, prev.remainingSeconds + deltaSeconds);
+      // Parte do relógio (e não do último valor desenhado) para não perder segundos
+      const current = Math.max(0, Math.ceil((prev.targetTimestamp - Date.now()) / 1000));
+      const newRemaining = Math.max(0, current + deltaSeconds);
       if (newRemaining <= 0) {
+        restTargetRef.current = null;
+        StorageService.saveRestTimer(null);
         return {
           ...prev,
           isActive: false,
@@ -263,17 +273,23 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           targetTimestamp: null,
         };
       }
+      const newTarget = Date.now() + newRemaining * 1000;
+      const totalDuration = Math.max(prev.totalDuration, newRemaining);
+      restTargetRef.current = newTarget;
+      StorageService.saveRestTimer({ targetTimestamp: newTarget, totalDuration });
       return {
         ...prev,
         remainingSeconds: newRemaining,
-        targetTimestamp: Date.now() + newRemaining * 1000,
-        totalDuration: Math.max(prev.totalDuration, newRemaining),
+        targetTimestamp: newTarget,
+        totalDuration,
       };
     });
   }, []);
 
   const dismissRestTimer = useCallback(() => {
     if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+    restTargetRef.current = null;
+    StorageService.saveRestTimer(null);
     setRestTimer((prev) => ({
       ...prev,
       isActive: false,
@@ -282,7 +298,8 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }));
   }, []);
 
-  const personalRecords = StorageService.calculatePersonalRecords(sessions);
+  // Percorre todo o histórico: só recalcula quando as sessões mudam
+  const personalRecords = useMemo(() => StorageService.calculatePersonalRecords(sessions), [sessions]);
 
   const startWorkout = useCallback(
     (template?: WorkoutTemplate) => {
@@ -435,7 +452,7 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const cancelWorkout = useCallback(() => {
     setActiveSession(null);
     dismissRestTimer();
-    StorageService.saveActiveSession(null);
+    StorageService.saveActiveSession(null).catch((e) => console.warn('Active session not cleared:', e));
   }, [dismissRestTimer]);
 
   const finishWorkout = useCallback(async (caloriesBurned?: number): Promise<WorkoutSession | null> => {
@@ -486,26 +503,33 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       caloriesBurned,
     };
 
+    // Se a gravação falhar o erro sobe ao ecrã e o treino em curso é mantido (nada se perde)
     const updatedSessions = [completedSession, ...sessions];
-    setSessions(updatedSessions);
     await StorageService.saveSessions(updatedSessions);
+    setSessions(updatedSessions);
 
-    // Update template last performed if applicable
+    // Update template last performed if applicable (não crítico)
     if (activeSession.templateId) {
       const updatedTemplates = templates.map((t) =>
         t.id === activeSession.templateId
           ? { ...t, lastPerformed: new Date().toISOString() }
           : t
       );
-      setTemplates(updatedTemplates);
-      await StorageService.saveTemplates(updatedTemplates);
+      try {
+        await StorageService.saveTemplates(updatedTemplates);
+        setTemplates(updatedTemplates);
+      } catch (e) {
+        console.warn('Could not update template lastPerformed:', e);
+      }
     }
 
     setActiveSession(null);
     dismissRestTimer();
     setPrAlert(null);
     sessionPRRef.current = {};
-    await StorageService.saveActiveSession(null);
+    await StorageService.saveActiveSession(null).catch((e) =>
+      console.warn('Active session not cleared:', e)
+    );
 
     if (Platform.OS !== 'web') {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
@@ -832,8 +856,8 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     const updatedSessions = sessions.map((s) => (s.id === finalSession.id ? finalSession : s));
-    setSessions(updatedSessions);
     await StorageService.saveSessions(updatedSessions);
+    setSessions(updatedSessions);
 
     if (Platform.OS !== 'web') {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
@@ -852,8 +876,8 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         id: `bm-${Date.now()}`,
       };
       const updated = [newMetric, ...bodyMetrics];
-      setBodyMetrics(updated);
       await StorageService.saveBodyMetrics(updated);
+      setBodyMetrics(updated);
       return newMetric;
     },
     [bodyMetrics]
@@ -870,8 +894,8 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const deleteBodyMetric = useCallback(
     async (id: string) => {
       const updated = bodyMetrics.filter((m) => m.id !== id);
-      setBodyMetrics(updated);
       await StorageService.saveBodyMetrics(updated);
+      setBodyMetrics(updated);
     },
     [bodyMetrics]
   );
@@ -965,7 +989,7 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     await StorageService.setLastBackupAt(now);
   }, []);
 
-  const exportBackup = useCallback(async (): Promise<boolean> => {
+  const exportBackup = useCallback(async (): Promise<BackupExportResult> => {
     return await StorageService.shareBackupFile(
       exercises,
       templates,
@@ -975,19 +999,22 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
   }, [exercises, templates, sessions, bodyMetrics, progressPhotos]);
 
-  const restoreBackup = useCallback(async (jsonString: string): Promise<boolean> => {
-    const restored = await StorageService.parseAndRestoreBackup(jsonString);
-    if (restored) {
+  const restoreBackup = useCallback(
+    async (jsonString: string): Promise<BackupRestoreResult> => {
+      // Lança erro (e não altera nada) se o backup for inválido ou a gravação falhar
+      const restored = await StorageService.parseAndRestoreBackup(jsonString);
       setExercises(restored.exercises);
       setTemplates(restored.templates);
       setSessions(restored.sessions);
       setBodyMetrics(restored.bodyMetrics);
       setProgressPhotos(restored.progressPhotos);
+      setActiveSession(null);
+      dismissRestTimer();
       await markBackupSaved();
-      return true;
-    }
-    return false;
-  }, [markBackupSaved]);
+      return restored;
+    },
+    [markBackupSaved, dismissRestTimer]
+  );
 
   const saveNewTemplate = useCallback(
     async (tpl: Omit<WorkoutTemplate, 'id'>): Promise<WorkoutTemplate> => {
@@ -996,8 +1023,8 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         id: `tpl-${Date.now()}`,
       };
       const updated = [...templates, newTemplate];
-      setTemplates(updated);
       await StorageService.saveTemplates(updated);
+      setTemplates(updated);
       return newTemplate;
     },
     [templates]
@@ -1006,8 +1033,8 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const updateTemplate = useCallback(
     async (id: string, updates: Partial<Omit<WorkoutTemplate, 'id'>>): Promise<void> => {
       const updated = templates.map((t) => (t.id === id ? { ...t, ...updates } : t));
-      setTemplates(updated);
       await StorageService.saveTemplates(updated);
+      setTemplates(updated);
     },
     [templates]
   );
@@ -1015,8 +1042,8 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const deleteTemplate = useCallback(
     async (id: string): Promise<void> => {
       const updated = templates.filter((t) => t.id !== id);
-      setTemplates(updated);
       await StorageService.saveTemplates(updated);
+      setTemplates(updated);
     },
     [templates]
   );
@@ -1029,65 +1056,79 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         isCustom: true,
       };
       const updated = [...exercises, newEx];
-      setExercises(updated);
       await StorageService.saveExercises(updated);
+      setExercises(updated);
       return newEx;
     },
     [exercises]
   );
 
+  const value = useMemo<GymContextType>(
+    () => ({
+      exercises,
+      templates,
+      sessions,
+      bodyMetrics,
+      activeSession,
+      personalRecords,
+      isLoading,
+      startWorkout,
+      startWorkoutFromSession,
+      finishWorkout,
+      cancelWorkout,
+      deleteSession,
+      updateSession,
+      addExerciseToActiveWorkout,
+      removeExerciseFromActiveWorkout,
+      updateExerciseNotes,
+      toggleSuperset,
+      addSetToExercise,
+      generateWarmupSets,
+      removeSet,
+      updateSet,
+      toggleSetCompleted,
+      saveNewTemplate,
+      updateTemplate,
+      deleteTemplate,
+      addCustomExercise,
+      deleteExercise,
+      addBodyMetric,
+      updateBodyMetric,
+      deleteBodyMetric,
+      progressPhotos,
+      addProgressPhoto,
+      deleteProgressPhoto,
+      completeCurrentSetAndRest,
+      isAudioMuted,
+      toggleAudioMuted,
+      resetAllData,
+      exportBackup,
+      restoreBackup,
+      markBackupSaved,
+      lastBackupAt,
+      prAlert,
+      dismissPRAlert,
+      startRestTimer,
+      adjustRestTimer,
+      dismissRestTimer,
+    }),
+    [
+      exercises, templates, sessions, bodyMetrics, activeSession, personalRecords, isLoading,
+      startWorkout, startWorkoutFromSession, finishWorkout, cancelWorkout, deleteSession,
+      updateSession, addExerciseToActiveWorkout, removeExerciseFromActiveWorkout,
+      updateExerciseNotes, toggleSuperset, addSetToExercise, generateWarmupSets, removeSet,
+      updateSet, toggleSetCompleted, saveNewTemplate, updateTemplate, deleteTemplate,
+      addCustomExercise, deleteExercise, addBodyMetric, updateBodyMetric, deleteBodyMetric,
+      progressPhotos, addProgressPhoto, deleteProgressPhoto, completeCurrentSetAndRest,
+      isAudioMuted, toggleAudioMuted, resetAllData, exportBackup, restoreBackup,
+      markBackupSaved, lastBackupAt, prAlert, dismissPRAlert, startRestTimer,
+      adjustRestTimer, dismissRestTimer,
+    ]
+  );
+
   return (
-    <GymContext.Provider
-      value={{
-        exercises,
-        templates,
-        sessions,
-        bodyMetrics,
-        activeSession,
-        personalRecords,
-        restTimer,
-        isLoading,
-        startWorkout,
-        startWorkoutFromSession,
-        finishWorkout,
-        cancelWorkout,
-        deleteSession,
-        updateSession,
-        addExerciseToActiveWorkout,
-        removeExerciseFromActiveWorkout,
-        updateExerciseNotes,
-        toggleSuperset,
-        addSetToExercise,
-        generateWarmupSets,
-        removeSet,
-        updateSet,
-        toggleSetCompleted,
-        saveNewTemplate,
-        updateTemplate,
-        deleteTemplate,
-        addCustomExercise,
-        deleteExercise,
-        addBodyMetric,
-        updateBodyMetric,
-        deleteBodyMetric,
-        progressPhotos,
-        addProgressPhoto,
-        deleteProgressPhoto,
-        completeCurrentSetAndRest,
-        isAudioMuted,
-        toggleAudioMuted,
-        resetAllData,
-        exportBackup,
-        restoreBackup,
-        markBackupSaved,
-        lastBackupAt,
-        prAlert,
-        dismissPRAlert,
-        startRestTimer,
-        adjustRestTimer,
-        dismissRestTimer,
-      }}>
-      {children}
+    <GymContext.Provider value={value}>
+      <RestTimerContext.Provider value={restTimer}>{children}</RestTimerContext.Provider>
     </GymContext.Provider>
   );
 };
@@ -1096,6 +1137,15 @@ export const useGym = () => {
   const context = useContext(GymContext);
   if (!context) {
     throw new Error('useGym must be used within a GymProvider');
+  }
+  return context;
+};
+
+/** Estado do temporizador de descanso (atualiza várias vezes por segundo). */
+export const useRestTimer = () => {
+  const context = useContext(RestTimerContext);
+  if (!context) {
+    throw new Error('useRestTimer must be used within a GymProvider');
   }
   return context;
 };

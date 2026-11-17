@@ -13,13 +13,14 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { WorkoutSession, WorkoutExercise, WorkoutSet } from '../types/gym';
+import { describeStorageError } from '../services/storage';
 import GymTheme from '../constants/theme';
 
 interface EditWorkoutModalProps {
   visible: boolean;
   session: WorkoutSession | null;
   onClose: () => void;
-  onSave: (updated: WorkoutSession) => void;
+  onSave: (updated: WorkoutSession) => void | Promise<void>;
 }
 
 export const EditWorkoutModal: React.FC<EditWorkoutModalProps> = ({
@@ -112,7 +113,7 @@ export const EditWorkoutModal: React.FC<EditWorkoutModalProps> = ({
     );
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!title.trim()) {
       Alert.alert('Título inválido', 'O treino precisa de ter um título.');
       return;
@@ -148,8 +149,12 @@ export const EditWorkoutModal: React.FC<EditWorkoutModalProps> = ({
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
     }
 
-    onSave(updatedSession);
-    onClose();
+    try {
+      await onSave(updatedSession);
+      onClose();
+    } catch (e) {
+      Alert.alert('Erro ao guardar', describeStorageError(e, 'Não foi possível guardar as alterações ao treino.'));
+    }
   };
 
   return (
@@ -268,7 +273,7 @@ export const EditWorkoutModal: React.FC<EditWorkoutModalProps> = ({
                         value={s.weightKg === 0 ? '' : `${s.weightKg}`}
                         onChangeText={(txt) => {
                           const val = parseFloat(txt.replace(',', '.'));
-                          updateSetField(exIdx, sIdx, 'weightKg', isNaN(val) ? 0 : val);
+                          updateSetField(exIdx, sIdx, 'weightKg', Number.isFinite(val) && val > 0 ? val : 0);
                         }}
                         placeholder="0"
                         placeholderTextColor={GymTheme.colors.textMuted}
@@ -281,7 +286,7 @@ export const EditWorkoutModal: React.FC<EditWorkoutModalProps> = ({
                         value={s.reps === 0 ? '' : `${s.reps}`}
                         onChangeText={(txt) => {
                           const val = parseInt(txt, 10);
-                          updateSetField(exIdx, sIdx, 'reps', isNaN(val) ? 0 : val);
+                          updateSetField(exIdx, sIdx, 'reps', Number.isFinite(val) && val > 0 ? val : 0);
                         }}
                         placeholder="0"
                         placeholderTextColor={GymTheme.colors.textMuted}
